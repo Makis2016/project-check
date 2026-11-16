@@ -1,0 +1,123 @@
+{
+  "updated": "2026-11-17",
+  "note": "精选离线指纹库，仅覆盖常见组件的高置信版本区间；命中结果需人工复核。",
+  "entries": [
+    {
+      "product": "nginx",
+      "min_version": "0.6.18",
+      "max_version_exclusive": "1.20.1",
+      "cve": "CVE-2021-23017",
+      "severity": "high",
+      "title": "nginx DNS 解析器存在越界写漏洞",
+      "description": "受影响版本在解析 DNS 响应时存在一字节越界写，特定条件下可能导致拒绝服务或远程代码执行。",
+      "remediation": "升级 nginx 至 1.20.1 / 1.21.0 或更高版本。",
+      "reference": "https://nginx.org/en/security_advisories.html"
+    },
+    {
+      "product": "apache",
+      "min_version": "2.4.49",
+      "max_version_exclusive": "2.4.50",
+      "cve": "CVE-2021-41773",
+      "severity": "critical",
+      "title": "Apache HTTP Server 2.4.49 路径穿越与远程代码执行",
+      "description": "对路径规范化处理不当，攻击者可构造特殊路径读取 Web 根目录之外的文件；若启用了 CGI，可导致远程代码执行。",
+      "remediation": "升级至 Apache 2.4.51 或更高版本，并确认别名目录未开启不必要的 CGI。",
+      "reference": "https://httpd.apache.org/security/vulnerabilities_24.html"
+    },
+    {
+      "product": "apache",
+      "min_version": "2.4.50",
+      "max_version_exclusive": "2.4.51",
+      "cve": "CVE-2021-42013",
+      "severity": "critical",
+      "title": "Apache HTTP Server 2.4.50 路径穿越与远程代码执行",
+      "description": "CVE-2021-41773 的修复不完整，仍可通过双重编码绕过路径规范化，导致文件读取或 RCE。",
+      "remediation": "立即升级至 Apache 2.4.51 或更高版本。",
+      "reference": "https://httpd.apache.org/security/vulnerabilities_24.html"
+    },
+    {
+      "product": "jquery",
+      "max_version_exclusive": "3.5.0",
+      "cve": "CVE-2020-11022",
+      "severity": "medium",
+      "title": "jQuery htmlPrefilter 存在跨站脚本风险",
+      "description": "jQuery 在 3.5.0 之前的版本中，htmlPrefilter 对传入 HTML 的处理可能导致 XSS，应用若使用 html()/append() 处理不可信内容可被利用。",
+      "remediation": "升级 jQuery 至 3.5.0+（建议 3.7.x），并避免将不可信输入传给 html()、append() 等方法。",
+      "reference": "https://nvd.nist.gov/vuln/detail/CVE-2020-11022"
+    },
+    {
+      "product": "jquery",
+      "max_version_exclusive": "3.0.0",
+      "cve": "CVE-2015-9251",
+      "severity": "medium",
+      "title": "jQuery 旧版本跨域 AJAX 处理缺陷",
+      "description": "3.0.0 之前的 jQuery 在处理跨域 AJAX 时可能执行返回内容中的脚本，存在 XSS 风险。",
+      "remediation": "升级 jQuery 至 3.0.0 以上，优先使用 3.7.x。",
+      "reference": "https://nvd.nist.gov/vuln/detail/CVE-2015-9251"
+    },
+    {
+      "product": "bootstrap",
+      "min_version": "3.0.0",
+      "max_version_exclusive": "3.4.1",
+      "cve": "CVE-2019-8331",
+      "severity": "medium",
+      "title": "Bootstrap 3 Tooltip/Popover 存在 XSS",
+      "description": "Bootstrap 3.4.1 之前版本中，Tooltip 与 Popover 的 data-template 属性可被利用注入脚本。",
+      "remediation": "升级 Bootstrap 至 3.4.1+，或迁移至 Bootstrap 4.3.1+/5.x。",
+      "reference": "https://nvd.nist.gov/vuln/detail/CVE-2019-8331"
+    },
+    {
+      "product": "bootstrap",
+      "min_version": "4.0.0",
+      "max_version_exclusive": "4.3.1",
+      "cve": "CVE-2019-8331",
+      "severity": "medium",
+      "title": "Bootstrap 4 Tooltip/Popover 存在 XSS",
+      "description": "Bootstrap 4.3.1 之前版本中，Tooltip 与 Popover 的 data-template 属性可被利用注入脚本。",
+      "remediation": "升级 Bootstrap 至 4.3.1+ 或 5.x。",
+      "reference": "https://nvd.nist.gov/vuln/detail/CVE-2019-8331"
+    },
+    {
+      "product": "tomcat",
+      "max_version_exclusive": "9.0.31",
+      "cve": "CVE-2020-1938",
+      "severity": "critical",
+      "title": "Tomcat AJP 文件包含漏洞（Ghostcat）",
+      "description": "Tomcat 默认开启的 AJP 连接器存在文件包含漏洞，攻击者可读取 Web 应用配置文件，结合文件上传可导致 RCE。",
+      "remediation": "升级至 9.0.31 / 8.5.51 / 7.0.100 以上；如不使用 AJP，注释或删除 server.xml 中的 AJP Connector 并关闭 8009 端口。",
+      "reference": "https://nvd.nist.gov/vuln/detail/CVE-2020-1938"
+    },
+    {
+      "product": "thinkphp",
+      "min_version": "5.0.0",
+      "max_version_exclusive": "5.0.24",
+      "cve": "CVE-2018-20062",
+      "severity": "critical",
+      "title": "ThinkPHP 5.0 远程代码执行",
+      "description": "ThinkPHP 5.0.24 之前版本在未强制开启 debug 或特定路由配置下存在远程代码执行风险。",
+      "remediation": "升级 ThinkPHP 至 5.0.24+，并避免在生产环境暴露调试入口；建议升级到 6.x 并做代码审计。",
+      "reference": "https://nvd.nist.gov/vuln/detail/CVE-2018-20062"
+    },
+    {
+      "product": "thinkphp",
+      "min_version": "5.1.0",
+      "max_version_exclusive": "5.1.32",
+      "cve": "CVE-2018-20062",
+      "severity": "critical",
+      "title": "ThinkPHP 5.1 远程代码执行",
+      "description": "ThinkPHP 5.1.32 之前版本存在远程代码执行风险。",
+      "remediation": "升级 ThinkPHP 至 5.1.32+，建议升级到受支持的新版本。",
+      "reference": "https://nvd.nist.gov/vuln/detail/CVE-2018-20062"
+    },
+    {
+      "product": "php",
+      "max_version_exclusive": "7.4.30",
+      "cve": "CVE-2022-31626",
+      "severity": "medium",
+      "title": "PHP 旧版本存在多处安全修复缺失",
+      "description": "PHP 7.4.30 之前版本包含多个已修复的安全问题（如 mysqlnd 缓冲区问题）。指纹仅能判断版本区间，实际可利用性需结合配置确认。",
+      "remediation": "升级 PHP 至 7.4.30+ 或 8.0.20+/8.1.7+，并保持小版本持续更新。",
+      "reference": "https://www.php.net/ChangeLog-7.php"
+    }
+  ]
+}

@@ -1,0 +1,60 @@
+name: build
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  package:
+    name: Package (${{ matrix.label }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows-x64
+            artifact: VulnLens-windows-x64
+            output: dist/VulnLens.exe
+          - os: macos-13
+            label: macos-intel
+            artifact: VulnLens-macos-intel
+            output: dist/VulnLens.app
+          - os: macos-14
+            label: macos-arm64
+            artifact: VulnLens-macos-arm64
+            output: dist/VulnLens.app
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install Python dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Package application
+        run: pyinstaller packaging/vulnlens.spec --noconfirm
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.output }}
+          if-no-files-found: error
