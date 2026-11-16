@@ -11,24 +11,8 @@ permissions:
 
 jobs:
   package:
-    name: Package (${{ matrix.label }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: windows-latest
-            label: windows-x64
-            artifact: VulnLens-windows-x64
-            output: dist/VulnLens.exe
-          - os: macos-13
-            label: macos-intel
-            artifact: VulnLens-macos-intel
-            output: dist/VulnLens.app
-          - os: macos-14
-            label: macos-arm64
-            artifact: VulnLens-macos-arm64
-            output: dist/VulnLens.app
+    name: Package (windows-x64)
+    runs-on: windows-latest
 
     steps:
       - uses: actions/checkout@v4
@@ -58,24 +42,13 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.output }}
+          name: VulnLens-windows-x64
+          path: dist/VulnLens.exe
           if-no-files-found: error
 
-      - name: Zip macOS app
-        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS'
-        run: ditto -c -k --keepParent dist/VulnLens.app VulnLens-${{ matrix.label }}.zip
-
       - name: Publish Windows build to release
-        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'Windows'
+        if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
           files: dist/VulnLens.exe
-          generate_release_notes: true
-
-      - name: Publish macOS build to release
-        if: startsWith(github.ref, 'refs/tags/') && runner.os == 'macOS'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: VulnLens-${{ matrix.label }}.zip
           generate_release_notes: true
