@@ -28,6 +28,10 @@ async def insecure_middleware(request: Request, call_next):
         response.headers["Access-Control-Allow-Credentials"] = "true"
     if request.url.path == "/":
         response.headers.append("set-cookie", "sessionid=abc123; Path=/")
+        response.headers.append(
+            "set-cookie",
+            "auth=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4ifQ.abcdefghij; Path=/; HttpOnly",
+        )
     return response
 
 
@@ -54,6 +58,45 @@ async def item(id: str = "1"):
             status_code=500,
         )
     return {"id": id}
+
+
+@app.get("/api/echo", response_class=HTMLResponse)
+async def api_echo(message: str = "") -> str:
+    return f"<html><body><p>echo: {message}</p></body></html>"
+
+
+OPENAPI_SPEC = {
+    "openapi": "3.0.3",
+    "info": {"title": "Acme API", "version": "1.0.0"},
+    "paths": {
+        "/api/echo": {
+            "get": {
+                "parameters": [{"name": "message", "in": "query", "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "ok"}},
+            }
+        },
+        "/api/item": {
+            "get": {
+                "parameters": [{"name": "id", "in": "query", "schema": {"type": "string"}}],
+                "responses": {"200": {"description": "ok"}},
+            }
+        },
+        "/api/orders/{orderId}": {
+            "get": {
+                "parameters": [
+                    {"name": "orderId", "in": "path", "required": True, "schema": {"type": "string"}},
+                    {"name": "expand", "in": "query", "schema": {"type": "string"}},
+                ],
+                "responses": {"200": {"description": "ok"}},
+            }
+        },
+    },
+}
+
+
+@app.get("/openapi.json")
+async def openapi_doc() -> JSONResponse:
+    return JSONResponse(OPENAPI_SPEC)
 
 
 @app.get("/redirect")

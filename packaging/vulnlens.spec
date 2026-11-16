@@ -20,6 +20,8 @@ hiddenimports = collect_submodules("backend") + collect_submodules("uvicorn") + 
     "uvicorn.protocols.http.h11_impl",
     "uvicorn.protocols.websockets.auto",
     "uvicorn.lifespan.on",
+    "yaml",
+    "socksio",
 ]
 
 try:
@@ -73,7 +75,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "VulnLens",
             "CFBundleDisplayName": "VulnLens",
-            "CFBundleShortVersionString": "1.0.0",
+            "CFBundleShortVersionString": "1.1.0",
             "NSHighResolutionCapable": True,
         },
     )

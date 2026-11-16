@@ -34,8 +34,11 @@ class ScanConfig:
     scan_ports: bool = True
     subdomain_enum: bool = False
     active_checks: bool = True
+    api_scan: bool = True
     ignore_tls: bool = False
     max_js_files: int = 40
+    proxy: str = ""
+    exclude_paths: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -49,6 +52,7 @@ PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
         "scan_ports": False,
         "subdomain_enum": False,
         "active_checks": False,
+        "api_scan": False,
         "max_js_files": 20,
     },
     "standard": {
@@ -58,6 +62,7 @@ PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
         "scan_ports": True,
         "subdomain_enum": False,
         "active_checks": True,
+        "api_scan": True,
         "max_js_files": 40,
     },
     "deep": {
@@ -67,10 +72,26 @@ PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
         "scan_ports": True,
         "subdomain_enum": True,
         "active_checks": True,
+        "api_scan": True,
         "max_js_files": 80,
         "ports": EXTENDED_PORTS,
     },
 }
+
+
+def _parse_exclude(raw: Any) -> list[str]:
+    if isinstance(raw, str):
+        parts = raw.replace("\n", ",").split(",")
+    elif isinstance(raw, (list, tuple)):
+        parts = [str(item) for item in raw]
+    else:
+        parts = []
+    cleaned: list[str] = []
+    for part in parts:
+        value = part.strip()
+        if value and value not in cleaned:
+            cleaned.append(value[:200])
+    return cleaned[:50]
 
 
 def build_config(payload: dict[str, Any]) -> ScanConfig:
@@ -91,8 +112,11 @@ def build_config(payload: dict[str, Any]) -> ScanConfig:
         scan_ports=bool(payload.get("scan_ports", defaults["scan_ports"])),
         subdomain_enum=bool(payload.get("subdomain_enum", defaults["subdomain_enum"])),
         active_checks=bool(payload.get("active_checks", defaults["active_checks"])),
+        api_scan=bool(payload.get("api_scan", defaults.get("api_scan", True))),
         ignore_tls=bool(payload.get("ignore_tls")),
         max_js_files=int(payload.get("max_js_files") or defaults["max_js_files"]),
+        proxy=str(payload.get("proxy") or "").strip(),
+        exclude_paths=_parse_exclude(payload.get("exclude_paths")),
     )
     cfg.rate_limit = min(max(cfg.rate_limit, 0.5), 30.0)
     cfg.max_pages = min(max(cfg.max_pages, 1), 500)
@@ -117,6 +141,9 @@ class Finding:
     owasp: str = ""
     references: list[str] = field(default_factory=list)
     fingerprint: str = ""
+    request: str = ""
+    response: str = ""
+    curl: str = ""
 
     def key(self) -> str:
         return "|".join([self.check_id, self.url, self.param, self.fingerprint or self.title])

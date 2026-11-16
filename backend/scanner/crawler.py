@@ -10,9 +10,11 @@ from urllib.parse import parse_qs, urljoin, urlparse, urlunparse
 from bs4 import BeautifulSoup
 
 from .assets import parse_target
+from .exclude import is_excluded
 from .fingerprints import detect_tech
 from .http_client import HttpSession, ResponseData, ScanLimitReached
 from .models import CookieInfo, Discovery, Endpoint, Form, Page, ScanConfig
+from .openapi import parse_spec
 
 LogFn = Callable[[str, str], Awaitable[None]]
 
@@ -145,6 +147,9 @@ class Crawler:
         self.queue: deque[str] = deque()
         self.queued: set[str] = set()
 
+    def _excluded(self, url: str) -> bool:
+        return is_excluded(url, self.config.exclude_paths)
+
     async def run(self) -> Discovery:
         discovery = Discovery()
         await self.log("info", f"抓取入口页面 {self.root_url}")
@@ -191,6 +196,12 @@ class Crawler:
         await self.log("success", f"页面抓取完成：{len(discovery.pages)} 个页面，{len(self.visited)} 次访问")
         await self._analyze_js(discovery)
         await self._build_tech(discovery)
+        if self.config.exclude_paths:
+            removed = [key for key, endpoint in discovery.endpoints.items() if self._excluded(endpoint.url)]
+            for key in removed:
+                del discovery.endpoints[key]
+            if removed:
+                await self.log("info", f"按排除规则跳过 {len(removed)} 个接口")
         return discovery
 
     async def _fetch_batch(self, urls: list[str]) -> list[tuple[str, ResponseData]]:
@@ -231,7 +242,7 @@ class Crawler:
 
         for tag in soup.find_all(["a", "area"], href=True):
             url = normalize_url(page_url, tag.get("href", ""), self.origin)
-            if url:
+            if url and not self._excluded(url):
                 params = list(parse_qs(urlparse(url).query).keys())
                 discovery.add_endpoint(Endpoint(url=url, source="crawl", params=params))
                 if should_crawl(url) and url not in self.queued and len(self.queued) < 800:
@@ -240,12 +251,17 @@ class Crawler:
 
         for tag in soup.find_all(["iframe", "frame"], src=True):
             url = normalize_url(page_url, tag.get("src", ""), self.origin)
-            if url and not is_static(url):
+            if url and not is_static(url) and not self._excluded(url):
                 discovery.add_endpoint(Endpoint(url=url, source="crawl"))
 
         for tag in soup.find_all("script", src=True):
             url = normalize_url(page_url, tag.get("src", ""), self.origin)
-            if url and url not in discovery.js_files and len(discovery.js_files) < self.config.max_js_files:
+            if (
+                url
+                and not self._excluded(url)
+                and url not in discovery.js_files
+                and len(discovery.js_files) < self.config.max_js_files
+            ):
                 discovery.js_files.append(url)
 
         for tag in soup.find_all("script"):
@@ -254,11 +270,15 @@ class Crawler:
                 key = f"inline:{page_url}"
                 discovery.js_text[key] = (discovery.js_text.get(key, "") + "\n" + inline)[:800_000]
                 for path in extract_paths(inline, page_url, self.origin):
+                    if self._excluded(path):
+                        continue
                     discovery.add_endpoint(Endpoint(url=path, source="js", params=list(parse_qs(urlparse(path).query).keys())))
 
         for form in soup.find_all("form"):
             action = form.get("action") or page_url
             action_url = normalize_url(page_url, action, self.origin) or page_url
+            if self._excluded(action_url):
+                continue
             method = (form.get("method") or "GET").upper()
             inputs = []
             for field in form.find_all(["input", "textarea", "select"]):
@@ -285,7 +305,7 @@ class Crawler:
                 path = line.split(":", 1)[1].strip()
                 if path and path != "/" and "*" not in path:
                     url = normalize_url(robots_url, path, self.origin)
-                    if url:
+                    if url and not self._excluded(url):
                         discovery.robots.append(url)
                         discovery.add_endpoint(Endpoint(url=url, source="robots"))
             elif lowered.startswith("sitemap:"):
@@ -317,7 +337,7 @@ class Crawler:
             locs = [el.text.strip() for el in root.iter() if el.tag.endswith("loc") and el.text]
             for loc in locs[:80]:
                 url = normalize_url(sitemap_url, loc, self.origin)
-                if url and should_crawl(url):
+                if url and should_crawl(url) and not self._excluded(url):
                     discovery.add_endpoint(Endpoint(url=url, source="sitemap"))
                     if url not in self.queued and len(self.queued) < 800:
                         self.queued.add(url)
@@ -327,8 +347,10 @@ class Crawler:
         base = f"{self.origin[0]}://{self.origin[1]}"
         for path in DOC_PATHS:
             url = base + path
+            if self._excluded(url):
+                continue
             try:
-                resp = await self.session.get(url, allow_redirects=True, max_bytes=600_000)
+                resp = await self.session.get(url, allow_redirects=True, max_bytes=2_000_000)
             except ScanLimitReached:
                 return
             if resp.error or resp.status != 200 or not resp.text:
@@ -342,6 +364,13 @@ class Crawler:
                 discovery.docs.append(resp.url)
                 discovery.add_endpoint(Endpoint(url=resp.url, source="docs", status=resp.status, content_type=resp.content_type))
                 await self.log("success", f"发现接口文档：{resp.url}")
+                if self.config.api_scan and "html" not in content_type:
+                    endpoints = parse_spec(resp.text, resp.url)
+                    for endpoint in endpoints:
+                        if not self._excluded(endpoint.url):
+                            discovery.add_endpoint(endpoint)
+                    if endpoints:
+                        await self.log("info", f"从接口文档注入 {len(endpoints)} 个接口参数")
                 break
 
     async def _analyze_js(self, discovery: Discovery) -> None:
@@ -349,6 +378,8 @@ class Crawler:
             return
         await self.log("info", f"分析前端 JS：{len(discovery.js_files)} 个文件")
         for js_url in discovery.js_files[: self.config.max_js_files]:
+            if self._excluded(js_url):
+                continue
             try:
                 resp = await self.session.get(js_url, max_bytes=2_000_000)
             except ScanLimitReached:
@@ -357,6 +388,8 @@ class Crawler:
                 continue
             discovery.js_text[js_url] = resp.text
             for path in extract_paths(resp.text, js_url, self.origin):
+                if self._excluded(path):
+                    continue
                 discovery.add_endpoint(
                     Endpoint(url=path, source="js", params=list(parse_qs(urlparse(path).query).keys()))
                 )

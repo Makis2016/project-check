@@ -10,15 +10,15 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .scanner.engine import ScanEngine
-from .scanner.models import build_config, new_scan_id
-from .scanner.report import build_markdown
+from .scanner.models import SEVERITIES, build_config, new_scan_id
+from .scanner.report import build_csv, build_html, build_json, build_markdown
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 
@@ -175,9 +175,7 @@ async def delete_scan(scan_id: str) -> dict:
 
 @app.get("/api/scans/{scan_id}/report.md")
 async def download_report(scan_id: str) -> PlainTextResponse:
-    scan = db.get_scan(scan_id)
-    if scan is None:
-        raise HTTPException(status_code=404, detail="扫描记录不存在")
+    scan = _scan_or_404(scan_id)
     markdown = build_markdown(scan)
     filename = f"vulnlens-{scan_id}.md"
     return PlainTextResponse(
@@ -185,6 +183,114 @@ async def download_report(scan_id: str) -> PlainTextResponse:
         media_type="text/markdown; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+def _scan_or_404(scan_id: str) -> dict:
+    scan = db.get_scan(scan_id)
+    if scan is None:
+        raise HTTPException(status_code=404, detail="扫描记录不存在")
+    return scan
+
+
+@app.get("/api/scans/{scan_id}/report.html")
+async def download_report_html(scan_id: str) -> HTMLResponse:
+    scan = _scan_or_404(scan_id)
+    return HTMLResponse(
+        build_html(scan),
+        headers={"Content-Disposition": f'attachment; filename="vulnlens-{scan_id}.html"'},
+    )
+
+
+@app.get("/api/scans/{scan_id}/export.json")
+async def download_export_json(scan_id: str) -> Response:
+    scan = _scan_or_404(scan_id)
+    return Response(
+        build_json(scan),
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="vulnlens-{scan_id}.json"'},
+    )
+
+
+@app.get("/api/scans/{scan_id}/export.csv")
+async def download_export_csv(scan_id: str) -> Response:
+    scan = _scan_or_404(scan_id)
+    return Response(
+        build_csv(scan),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="vulnlens-{scan_id}.csv"'},
+    )
+
+
+def _finding_key(item: dict) -> str:
+    return "|".join(str(item.get(name) or "") for name in ("check_id", "url", "param", "fingerprint"))
+
+
+def _severity_counts(items: list[dict]) -> dict[str, int]:
+    counts = {severity: 0 for severity in SEVERITIES}
+    for item in items:
+        severity = str(item.get("severity") or "info")
+        counts[severity] = counts.get(severity, 0) + 1
+    return counts
+
+
+@app.get("/api/scans/{scan_id}/compare")
+async def compare_scan(scan_id: str, base: str | None = None) -> dict:
+    current = _scan_or_404(scan_id)
+    if base:
+        previous = db.get_scan(base)
+        if previous is None:
+            raise HTTPException(status_code=404, detail="基线扫描不存在")
+    else:
+        previous = None
+        for item in db.list_scans(limit=100):
+            if item["id"] == scan_id:
+                continue
+            if item["target"] != current["target"] or item["status"] != "completed":
+                continue
+            if (item.get("created_at") or 0) >= (current.get("created_at") or 0):
+                continue
+            previous = db.get_scan(item["id"])
+            break
+    if previous is None:
+        return {"available": False, "reason": "没有同一目标的历史已完成扫描可供对比"}
+
+    current_map = {_finding_key(item): item for item in current.get("findings") or []}
+    previous_map = {_finding_key(item): item for item in previous.get("findings") or []}
+    added = [item for key, item in current_map.items() if key not in previous_map]
+    resolved = [item for key, item in previous_map.items() if key not in current_map]
+    persisting = [item for key, item in current_map.items() if key in previous_map]
+    order = {severity: index for index, severity in enumerate(SEVERITIES)}
+    added.sort(key=lambda item: order.get(str(item.get("severity")), 99))
+    resolved.sort(key=lambda item: order.get(str(item.get("severity")), 99))
+    persisting.sort(key=lambda item: order.get(str(item.get("severity")), 99))
+    return {
+        "available": True,
+        "base": {
+            "id": previous["id"],
+            "created_at": previous.get("created_at"),
+            "summary": previous.get("summary"),
+            "preset": previous.get("preset"),
+        },
+        "current": {
+            "id": current["id"],
+            "created_at": current.get("created_at"),
+            "summary": current.get("summary"),
+            "preset": current.get("preset"),
+        },
+        "counts": {
+            "added": len(added),
+            "resolved": len(resolved),
+            "persisting": len(persisting),
+        },
+        "severity": {
+            "added": _severity_counts(added),
+            "resolved": _severity_counts(resolved),
+            "persisting": _severity_counts(persisting),
+        },
+        "added": added[:200],
+        "resolved": resolved[:200],
+        "persisting": persisting[:200],
+    }
 
 
 if FRONTEND_DIST.exists():

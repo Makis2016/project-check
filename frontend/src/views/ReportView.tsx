@@ -1,12 +1,28 @@
 import { useMemo, useState } from "react";
-import type { Scan, Severity } from "../types";
-import { desktopBridge, fetchReport } from "../api";
+import type { Finding, Scan, ScanDiff, Severity } from "../types";
+import {
+  compareScan,
+  desktopBridge,
+  exportFilename,
+  exportMeta,
+  fetchExport,
+  type ExportFormat,
+} from "../api";
 import FindingCard from "../components/FindingCard";
 import { SEVERITY_META, SEVERITY_ORDER, SeverityBadge, SeveritySummary } from "../components/Severity";
-import { AlertIcon, DownloadIcon, LinkIcon, RefreshIcon, SearchIcon, ServerIcon } from "../components/Icons";
+import {
+  AlertIcon,
+  ChevronIcon,
+  DiffIcon,
+  DownloadIcon,
+  LinkIcon,
+  RefreshIcon,
+  SearchIcon,
+  ServerIcon,
+} from "../components/Icons";
 import { formatDuration, formatTime, hostOf, PRESET_LABEL, riskLevel } from "../format";
 
-type Tab = "findings" | "endpoints" | "assets";
+type Tab = "findings" | "endpoints" | "assets" | "compare";
 
 interface Props {
   scan: Scan;
@@ -22,30 +38,66 @@ const STATUS_LABEL: Record<string, string> = {
   queued: "排队中",
 };
 
+function DiffList({
+  title,
+  tone,
+  items,
+}: {
+  title: string;
+  tone: "added" | "resolved" | "persisting";
+  items: Finding[];
+}) {
+  if (!items.length) return null;
+  return (
+    <section className={`diff-list diff-${tone}`}>
+      <header>
+        <span>{title}</span>
+        <b>{items.length}</b>
+      </header>
+      <ul>
+        {items.slice(0, 50).map((item, index) => (
+          <li key={`${item.check_id}-${item.url}-${index}`}>
+            <span className={`diff-sev sev-bg-${item.severity}`} />
+            <span className="diff-title">{item.title}</span>
+            <span className="diff-url mono">{item.method || "GET"} {item.url}</span>
+          </li>
+        ))}
+      </ul>
+      {items.length > 50 ? <div className="table-foot">仅展示前 50 条</div> : null}
+    </section>
+  );
+}
+
 export default function ReportView({ scan, onBack, onRescan }: Props) {
   const [tab, setTab] = useState<Tab>("findings");
   const [severity, setSeverity] = useState<"all" | Severity>("all");
   const [query, setQuery] = useState("");
-  const [exporting, setExporting] = useState(false);
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [exportOpen, setExportOpen] = useState(false);
   const [exportNote, setExportNote] = useState("");
   const [exportFailed, setExportFailed] = useState(false);
+  const [diff, setDiff] = useState<ScanDiff | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState("");
 
-  const handleExport = async () => {
+  const handleExport = async (format: ExportFormat) => {
     if (exporting) return;
-    setExporting(true);
+    setExportOpen(false);
+    setExporting(format);
     setExportNote("");
     setExportFailed(false);
+    const meta = exportMeta(format);
     try {
-      const text = await fetchReport(scan.id);
-      const filename = `vulnlens-${scan.id}.md`;
+      const text = await fetchExport(scan.id, format);
+      const filename = exportFilename(scan.id, format);
       const bridge = desktopBridge();
       if (bridge?.save_report) {
-        const result = await bridge.save_report(filename, text);
+        const result = await bridge.save_report(filename, text, [meta.fileType]);
         if (result?.cancelled) return;
         if (!result?.ok) throw new Error(result?.error || "保存失败");
-        setExportNote(`已保存到 ${result.path ?? filename}`);
+        setExportNote(`已保存${meta.label}到 ${result.path ?? filename}`);
       } else {
-        const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+        const blob = new Blob([text], { type: meta.mime });
         const url = URL.createObjectURL(blob);
         const link = document.createElement("a");
         link.href = url;
@@ -54,13 +106,33 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
         link.click();
         link.remove();
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-        setExportNote("已导出 Markdown");
+        setExportNote(`已导出 ${meta.label}`);
       }
     } catch (error) {
       setExportFailed(true);
       setExportNote(error instanceof Error ? error.message : "导出失败，请重试");
     } finally {
-      setExporting(false);
+      setExporting(null);
+    }
+  };
+
+  const openTab = (next: Tab) => {
+    setTab(next);
+    if (next === "compare" && !diff && !diffLoading) {
+      void loadDiff();
+    }
+  };
+
+  const loadDiff = async () => {
+    setDiffLoading(true);
+    setDiffError("");
+    try {
+      const result = await compareScan(scan.id);
+      setDiff(result);
+    } catch (error) {
+      setDiffError(error instanceof Error ? error.message : "对比失败");
+    } finally {
+      setDiffLoading(false);
     }
   };
 
@@ -121,9 +193,22 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
         </div>
         <div className="report-actions">
           <span className={`export-note ${exportFailed ? "is-error" : ""}`}>{exportNote}</span>
-          <button className="btn" onClick={handleExport} disabled={exporting}>
-            <DownloadIcon width={16} height={16} /> {exporting ? "导出中…" : "导出 Markdown"}
-          </button>
+          <div className="export-menu">
+            <button className="btn" onClick={() => setExportOpen((value) => !value)} disabled={Boolean(exporting)}>
+              <DownloadIcon width={16} height={16} /> {exporting ? `导出 ${exportMeta(exporting).label}…` : "导出报告"}
+              <ChevronIcon className={`chevron export-chevron ${exportOpen ? "rotated" : ""}`} width={14} height={14} />
+            </button>
+            {exportOpen && !exporting ? (
+              <div className="export-list">
+                {(["html", "md", "json", "csv"] as ExportFormat[]).map((format) => (
+                  <button key={format} className="export-item" onClick={() => void handleExport(format)}>
+                    <span>{exportMeta(format).label}</span>
+                    <em>.{exportMeta(format).ext}</em>
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
           <button className="btn btn-primary" onClick={() => onRescan(scan.target)}>
             <RefreshIcon width={16} height={16} /> 重新扫描
           </button>
@@ -152,24 +237,30 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
       </div>
 
       <div className="tabs">
-        <button className={`tab ${tab === "findings" ? "active" : ""}`} onClick={() => setTab("findings")}>
+        <button className={`tab ${tab === "findings" ? "active" : ""}`} onClick={() => openTab("findings")}>
           发现 <span>{findings.length}</span>
         </button>
-        <button className={`tab ${tab === "endpoints" ? "active" : ""}`} onClick={() => setTab("endpoints")}>
+        <button className={`tab ${tab === "endpoints" ? "active" : ""}`} onClick={() => openTab("endpoints")}>
           接口 <span>{endpoints.length}</span>
         </button>
-        <button className={`tab ${tab === "assets" ? "active" : ""}`} onClick={() => setTab("assets")}>
+        <button className={`tab ${tab === "assets" ? "active" : ""}`} onClick={() => openTab("assets")}>
           资产 <span>{(assets?.open_ports?.length ?? 0) + tech.length}</span>
         </button>
-        <div className="toolbar-search">
-          <SearchIcon width={15} height={15} />
-          <input
-            className="search-input"
-            placeholder={tab === "findings" ? "搜索发现…" : "搜索接口…"}
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-          />
-        </div>
+        <button className={`tab ${tab === "compare" ? "active" : ""}`} onClick={() => openTab("compare")}>
+          <DiffIcon width={14} height={14} /> 对比
+          {diff?.available && diff.counts ? <span className="tab-delta">+{diff.counts.added}</span> : null}
+        </button>
+        {tab !== "compare" ? (
+          <div className="toolbar-search">
+            <SearchIcon width={15} height={15} />
+            <input
+              className="search-input"
+              placeholder={tab === "findings" ? "搜索发现…" : "搜索接口…"}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </div>
+        ) : null}
       </div>
 
       {tab === "findings" ? (
@@ -229,6 +320,52 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
           </table>
           {filteredEndpoints.length === 0 ? <div className="empty-row">没有发现接口</div> : null}
           {filteredEndpoints.length > 300 ? <div className="table-foot">仅展示前 300 条</div> : null}
+        </div>
+      ) : null}
+
+      {tab === "compare" ? (
+        <div className="compare-view">
+          {diffLoading ? (
+            <div className="panel compare-loading"><span className="spinner" /> 正在查找同一目标的上一次扫描…</div>
+          ) : null}
+          {diffError ? (
+            <div className="notice error"><AlertIcon width={16} height={16} /> {diffError}</div>
+          ) : null}
+          {diff && !diff.available ? (
+            <div className="empty">
+              <DiffIcon width={24} height={24} />
+              <strong>暂无可对比的历史扫描</strong>
+              <p>{diff.reason ?? "完成一次新的扫描后再回来查看变化。"}</p>
+            </div>
+          ) : null}
+          {diff?.available ? (
+            <>
+              <div className="diff-overview">
+                <div className="diff-side">
+                  <span>基线扫描</span>
+                  <b>{formatTime(diff.base?.created_at)}</b>
+                  <em>{PRESET_LABEL[diff.base?.preset ?? ""] ?? diff.base?.preset}</em>
+                </div>
+                <div className="diff-arrow">→</div>
+                <div className="diff-side">
+                  <span>当前扫描</span>
+                  <b>{formatTime(diff.current?.created_at)}</b>
+                  <em>{PRESET_LABEL[diff.current?.preset ?? ""] ?? diff.current?.preset}</em>
+                </div>
+                <div className="diff-stats">
+                  <div className="diff-stat added"><b>+{diff.counts?.added ?? 0}</b><span>新增</span></div>
+                  <div className="diff-stat resolved"><b>-{diff.counts?.resolved ?? 0}</b><span>已修复</span></div>
+                  <div className="diff-stat persisting"><b>{diff.counts?.persisting ?? 0}</b><span>仍存在</span></div>
+                </div>
+              </div>
+              <DiffList title="新增风险" tone="added" items={diff.added ?? []} />
+              <DiffList title="已修复" tone="resolved" items={diff.resolved ?? []} />
+              <DiffList title="仍存在" tone="persisting" items={diff.persisting ?? []} />
+              {(diff.counts?.added ?? 0) === 0 && (diff.counts?.resolved ?? 0) === 0 ? (
+                <div className="table-foot">与基线相比没有变化。</div>
+              ) : null}
+            </>
+          ) : null}
         </div>
       ) : null}
 

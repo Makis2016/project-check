@@ -124,3 +124,18 @@ export const RefreshIcon = (props: IconProps) => (
     <path d="M20 4v5h-5" />
   </svg>
 );
+
+export const CopyIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <rect x="9" y="9" width="11" height="11" rx="2" />
+    <path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3" />
+  </svg>
+);
+
+export const DiffIcon = (props: IconProps) => (
+  <svg {...base(props)}>
+    <path d="M7 4v16M17 4v16" />
+    <path d="M4 8h6M4 16h6M14 12h6" />
+  </svg>
+);
+

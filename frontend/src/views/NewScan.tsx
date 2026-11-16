@@ -44,6 +44,9 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
   const [portsText, setPortsText] = useState("");
   const [subdomains, setSubdomains] = useState(false);
   const [ignoreTls, setIgnoreTls] = useState(false);
+  const [apiScan, setApiScan] = useState(true);
+  const [proxy, setProxy] = useState("");
+  const [excludeText, setExcludeText] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -56,6 +59,7 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
     setActiveChecks(id !== "quick");
     setScanPorts(id !== "quick");
     setSubdomains(id === "deep");
+    setApiScan(id !== "quick");
   };
 
   const parseHeaders = (): Record<string, string> => {
@@ -83,6 +87,14 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
     return parts.length ? parts : undefined;
   };
 
+  const parseExclude = (): string[] | undefined => {
+    const parts = excludeText
+      .split(/[\n,]+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+    return parts.length ? parts : undefined;
+  };
+
   const submit = async () => {
     setError("");
     const cleanTarget = target.trim();
@@ -104,10 +116,13 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
         headers: Object.keys(parseHeaders()).length ? parseHeaders() : undefined,
         rate_limit: rate,
         active_checks: activeChecks,
+        api_scan: apiScan,
         scan_ports: scanPorts,
         ports: parsePorts(),
         subdomain_enum: subdomains,
         ignore_tls: ignoreTls,
+        proxy: proxy.trim() || undefined,
+        exclude_paths: parseExclude(),
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : "启动扫描失败");
@@ -197,7 +212,7 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
         <button className="advanced-toggle" onClick={() => setAdvanced((value) => !value)}>
           <span className={`toggle-arrow ${advanced ? "open" : ""}`}>›</span>
           高级选项
-          <span className="advanced-sub">会话 Cookie、自定义 Header、限速、端口</span>
+          <span className="advanced-sub">会话 Cookie、代理、排除路径、限速、端口</span>
         </button>
 
         {advanced ? (
@@ -225,6 +240,32 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
                   spellCheck={false}
                 />
                 <span className="hint">每行一个，格式 Key: Value</span>
+              </label>
+            </div>
+
+            <div className="field-grid">
+              <label className="field">
+                <span className="label">HTTP / SOCKS5 代理（可选）</span>
+                <input
+                  className="input mono"
+                  placeholder="http://127.0.0.1:8080 或 socks5://127.0.0.1:1080"
+                  value={proxy}
+                  onChange={(event) => setProxy(event.target.value)}
+                  spellCheck={false}
+                />
+                <span className="hint">全部扫描请求经代理发出，便于配合 Burp / mitmproxy 抓包</span>
+              </label>
+              <label className="field">
+                <span className="label">排除路径 / 域名（可选）</span>
+                <textarea
+                  className="input mono textarea"
+                  placeholder={"/logout\n/admin\n*.pdf\ncdn.example.com"}
+                  value={excludeText}
+                  onChange={(event) => setExcludeText(event.target.value)}
+                  rows={3}
+                  spellCheck={false}
+                />
+                <span className="hint">每行一个，支持路径前缀、通配符与域名</span>
               </label>
             </div>
 
@@ -265,9 +306,14 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
                   端口探测
                 </label>
                 <label className="switch-row">
+                  <input type="checkbox" checked={apiScan} onChange={(e) => setApiScan(e.target.checked)} />
+                  <span className="switch" />
+                  接口文档参数扫描（OpenAPI）
+                </label>
+                <label className="switch-row">
                   <input type="checkbox" checked={subdomains} onChange={(e) => setSubdomains(e.target.checked)} />
                   <span className="switch" />
-                  子域名枚举
+                  子域名枚举与接管检测
                 </label>
                 <label className="switch-row">
                   <input type="checkbox" checked={ignoreTls} onChange={(e) => setIgnoreTls(e.target.checked)} />

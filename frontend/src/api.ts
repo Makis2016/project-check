@@ -1,4 +1,4 @@
-import type { Scan, ScanEvent, ScanPayload } from "./types";
+import type { Scan, ScanDiff, ScanEvent, ScanPayload } from "./types";
 
 const BASE = "";
 
@@ -40,22 +40,45 @@ export function deleteScan(id: string): Promise<{ ok: boolean }> {
   return request(`/api/scans/${id}`, { method: "DELETE" });
 }
 
-export function reportUrl(id: string): string {
-  return `${BASE}/api/scans/${id}/report.md`;
+export type ExportFormat = "md" | "html" | "json" | "csv";
+
+const EXPORT_META: Record<ExportFormat, { path: string; ext: string; mime: string; fileType: string; label: string }> = {
+  md: { path: "report.md", ext: "md", mime: "text/markdown;charset=utf-8", fileType: "Markdown (*.md)", label: "Markdown" },
+  html: { path: "report.html", ext: "html", mime: "text/html;charset=utf-8", fileType: "HTML (*.html)", label: "HTML 报告" },
+  json: { path: "export.json", ext: "json", mime: "application/json;charset=utf-8", fileType: "JSON (*.json)", label: "JSON 数据" },
+  csv: { path: "export.csv", ext: "csv", mime: "text/csv;charset=utf-8", fileType: "CSV (*.csv)", label: "CSV 表格" },
+};
+
+export function exportMeta(format: ExportFormat) {
+  return EXPORT_META[format];
 }
 
-export async function fetchReport(id: string): Promise<string> {
-  const response = await fetch(reportUrl(id));
+export function exportUrl(id: string, format: ExportFormat): string {
+  return `${BASE}/api/scans/${id}/${EXPORT_META[format].path}`;
+}
+
+export function exportFilename(id: string, format: ExportFormat): string {
+  return `vulnlens-${id}.${EXPORT_META[format].ext}`;
+}
+
+export async function fetchExport(id: string, format: ExportFormat): Promise<string> {
+  const response = await fetch(exportUrl(id, format));
   if (!response.ok) {
     throw new Error(`导出失败（${response.status}）`);
   }
   return response.text();
 }
 
+export function compareScan(id: string, base?: string): Promise<ScanDiff> {
+  const suffix = base ? `?base=${encodeURIComponent(base)}` : "";
+  return request(`/api/scans/${id}/compare${suffix}`);
+}
+
 interface DesktopBridge {
   save_report?: (
     filename: string,
     content: string,
+    fileTypes?: string[],
   ) => Promise<{ ok: boolean; path?: string; cancelled?: boolean; error?: string }>;
 }
 

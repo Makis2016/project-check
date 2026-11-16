@@ -16,6 +16,9 @@ export interface Finding {
   owasp?: string;
   references?: string[];
   fingerprint?: string;
+  request?: string;
+  response?: string;
+  curl?: string;
 }
 
 export interface Summary {
@@ -75,10 +78,13 @@ export interface ScanConfig {
   scan_ports: boolean;
   subdomain_enum: boolean;
   active_checks: boolean;
+  api_scan: boolean;
   ignore_tls: boolean;
   ports: number[];
   cookie: string;
   headers: Record<string, string>;
+  proxy: string;
+  exclude_paths: string[];
 }
 
 export interface Scan {
@@ -120,8 +126,34 @@ export interface ScanPayload {
   rate_limit?: number;
   max_pages?: number;
   active_checks?: boolean;
+  api_scan?: boolean;
   scan_ports?: boolean;
   subdomain_enum?: boolean;
   ignore_tls?: boolean;
   ports?: number[];
+  proxy?: string;
+  exclude_paths?: string[];
+}
+
+export interface DiffSide {
+  id: string;
+  created_at: number;
+  summary: Summary | null;
+  preset: string;
+}
+
+export interface ScanDiff {
+  available: boolean;
+  reason?: string;
+  base?: DiffSide;
+  current?: DiffSide;
+  counts?: { added: number; resolved: number; persisting: number };
+  severity?: {
+    added: Record<string, number>;
+    resolved: Record<string, number>;
+    persisting: Record<string, number>;
+  };
+  added?: Finding[];
+  resolved?: Finding[];
+  persisting?: Finding[];
 }

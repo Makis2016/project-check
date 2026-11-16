@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import socket
 import subprocess
@@ -14,8 +15,11 @@ if str(ROOT) not in sys.path:
 os.environ.setdefault("VULNLENS_DATA_DIR", str(ROOT / "data-test"))
 
 from backend import db  # noqa: E402
+from backend.app import compare_scan  # noqa: E402
 from backend.scanner.engine import ScanEngine  # noqa: E402
-from backend.scanner.models import ScanConfig  # noqa: E402
+from backend.scanner.exclude import is_excluded  # noqa: E402
+from backend.scanner.models import ScanConfig, build_config  # noqa: E402
+from backend.scanner.report import build_csv, build_html, build_json  # noqa: E402
 
 PORT = 8901
 
@@ -54,8 +58,60 @@ async def main() -> int:
         )
         state = {"value": "running"}
 
+        cfg = build_config(
+            {
+                "target": f"http://127.0.0.1:{PORT}",
+                "proxy": "http://127.0.0.1:8080",
+                "exclude_paths": "/logout\n*.pdf",
+            }
+        )
+        assert cfg.proxy == "http://127.0.0.1:8080" and cfg.exclude_paths == ["/logout", "*.pdf"]
+        assert is_excluded("https://example.com/logout?next=1", ["/logout"])
+        assert is_excluded("https://cdn.example.com/app.js", ["cdn.example.com"])
+        assert is_excluded("https://example.com/doc.pdf", ["*.pdf"])
+        assert not is_excluded("https://example.com/login", ["/logout"])
+
         db.init_db()
         db.delete_scan("smoke-test")
+        db.delete_scan("smoke-base")
+
+        base_config = config.to_dict()
+        db.create_scan("smoke-base", base_config)
+        root_url = f"http://127.0.0.1:{PORT}/"
+        db.save_results(
+            "smoke-base",
+            {"critical": 0, "high": 0, "medium": 1, "low": 0, "info": 0, "total": 2},
+            {},
+            {"endpoints": [], "tech": [], "docs": [], "forms": [], "cookies": [], "robots": [], "sitemaps": []},
+            [],
+        )
+        db.add_findings(
+            "smoke-base",
+            [
+                {
+                    "check_id": "headers.csp",
+                    "title": "缺少 CSP",
+                    "severity": "medium",
+                    "category": "headers",
+                    "confidence": "high",
+                    "url": root_url,
+                    "param": "",
+                    "fingerprint": "",
+                },
+                {
+                    "check_id": "legacy.removed",
+                    "title": "已修复的历史问题",
+                    "severity": "high",
+                    "category": "config",
+                    "confidence": "high",
+                    "url": root_url + "old",
+                    "param": "",
+                    "fingerprint": "",
+                },
+            ],
+        )
+        db.set_status("smoke-base", "completed")
+
         db.create_scan("smoke-test", config.to_dict())
 
         async def emit(event: dict) -> None:
@@ -92,9 +148,45 @@ async def main() -> int:
             "active.xss_reflected",
             "active.sqli_error",
             "active.open_redirect",
+            "jwt.no_exp",
         }
         missing = expected - ids
         print("missing:", sorted(missing) if missing else "none")
+
+        scan = db.get_scan("smoke-test")
+        assert scan is not None
+        endpoints = (scan.get("discovery") or {}).get("endpoints") or []
+        openapi_endpoints = [item for item in endpoints if "openapi" in str(item.get("source"))]
+        print("openapi endpoints:", len(openapi_endpoints))
+        if not any("message=1" in item["url"] for item in openapi_endpoints):
+            print("FAIL: OpenAPI 参数未注入接口列表")
+            return 1
+        if not any(item["check_id"] == "active.xss_reflected" and item.get("param") == "message" for item in findings):
+            print("FAIL: OpenAPI 注入参数未被主动扫描")
+            return 1
+        xss = next(item for item in findings if item["check_id"] == "active.xss_reflected")
+        if not (xss.get("request") and xss.get("response") and xss.get("curl")):
+            print("FAIL: 请求/响应原文或 cURL 缺失")
+            return 1
+
+        diff = await compare_scan("smoke-test")
+        print("diff:", diff.get("counts"), "available:", diff.get("available"))
+        if not diff.get("available") or diff["counts"]["resolved"] < 1:
+            print("FAIL: 扫描对比结果异常")
+            return 1
+
+        html_report = build_html(scan)
+        json_report = build_json(scan)
+        csv_report = build_csv(scan)
+        payload = json.loads(json_report)
+        if scan["target"] not in html_report or payload["scan"]["target"] != scan["target"]:
+            print("FAIL: HTML/JSON 报告内容异常")
+            return 1
+        if not csv_report.startswith("\ufeff") or "active.xss_reflected" not in csv_report:
+            print("FAIL: CSV 报告内容异常")
+            return 1
+        print("reports:", len(html_report), len(json_report), len(csv_report))
+
         return 0 if not missing else 1
     finally:
         proc.terminate()

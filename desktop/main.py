@@ -75,7 +75,7 @@ def run_browser_mode(url: str) -> int:
 class DesktopApi:
     """暴露给前端的本地能力（窗口内 JS 通过 window.pywebview.api 调用）。"""
 
-    def save_report(self, filename: str, content: str) -> dict:
+    def save_report(self, filename: str, content: str, file_types: list[str] | None = None) -> dict:
         import webview
 
         windows = webview.windows
@@ -84,10 +84,11 @@ class DesktopApi:
 
         dialog = getattr(webview, "FileDialog", None)
         save_dialog = dialog.SAVE if dialog is not None else webview.SAVE_DIALOG
+        types = tuple(file_types) if file_types else ("Markdown (*.md)",)
         selected = windows[0].create_file_dialog(
             save_dialog,
             save_filename=filename,
-            file_types=("Markdown (*.md)",),
+            file_types=types,
         )
         if not selected:
             return {"ok": False, "cancelled": True}

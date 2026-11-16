@@ -1,15 +1,20 @@
 from __future__ import annotations
 
+import base64
+import hashlib
+import json
 import random
 import re
 import string
 from urllib.parse import urljoin, urlparse, urlunparse
 
-from ..assets import tls_findings as build_tls_findings
+import httpx
+
+from ..assets import base_domain, is_ip, tls_findings as build_tls_findings
 from ..fingerprints import match_cves
 from ..http_client import ScanLimitReached
 from ..models import Finding
-from .base import CheckContext, finding, truncate
+from .base import CheckContext, capture, finding, truncate
 
 TRACE_PATTERNS = [
     ("Python", re.compile(r"Traceback \(most recent call last\)")),
@@ -218,6 +223,7 @@ async def check_cors(ctx: CheckContext) -> list[Finding]:
     if page is None:
         return []
     origin = "https://vulnlens-probe.example"
+    probe_headers = {**ctx.session.default_headers, "Origin": origin}
     try:
         resp = await ctx.session.get(page.url, headers={"Origin": origin})
     except ScanLimitReached:
@@ -239,6 +245,7 @@ async def check_cors(ctx: CheckContext) -> list[Finding]:
                 evidence=f"Access-Control-Allow-Origin: {acao}\nAccess-Control-Allow-Credentials: {acac}",
                 cwe="CWE-942",
                 owasp="A05:2021",
+                **capture(resp, url=page.url, headers=probe_headers),
             )
         ]
     if acao == "*" and acac == "true":
@@ -253,6 +260,7 @@ async def check_cors(ctx: CheckContext) -> list[Finding]:
                 url=page.url,
                 evidence=f"Access-Control-Allow-Origin: {acao}\nAccess-Control-Allow-Credentials: {acac}",
                 cwe="CWE-942",
+                **capture(resp, url=page.url, headers=probe_headers),
             )
         ]
     if acao == origin:
@@ -267,6 +275,7 @@ async def check_cors(ctx: CheckContext) -> list[Finding]:
                 url=page.url,
                 evidence=f"Origin: {origin}\nAccess-Control-Allow-Origin: {acao}",
                 cwe="CWE-942",
+                **capture(resp, url=page.url, headers=probe_headers),
             )
         ]
     return []
@@ -326,6 +335,7 @@ async def check_http_methods(ctx: CheckContext) -> list[Finding]:
                         url=page.url,
                         evidence=f"Allow: {allow}",
                         cwe="CWE-749",
+                        **capture(options, method="OPTIONS", url=page.url, headers=ctx.session.default_headers),
                     )
                 )
             risky = [m.strip() for m in upper.split(",") if m.strip() in ("PUT", "DELETE")]
@@ -341,6 +351,7 @@ async def check_http_methods(ctx: CheckContext) -> list[Finding]:
                         url=page.url,
                         evidence=f"Allow: {allow}",
                         cwe="CWE-749",
+                        **capture(options, method="OPTIONS", url=page.url, headers=ctx.session.default_headers),
                     )
                 )
         trace = await ctx.session.fetch("TRACE", page.url, max_bytes=60_000)
@@ -356,6 +367,7 @@ async def check_http_methods(ctx: CheckContext) -> list[Finding]:
                     url=page.url,
                     evidence=truncate(trace.text, 300),
                     cwe="CWE-749",
+                    **capture(trace, method="TRACE", url=page.url, headers=ctx.session.default_headers),
                 )
             )
     except ScanLimitReached:
@@ -541,8 +553,11 @@ async def check_sensitive_files(ctx: CheckContext) -> list[Finding]:
     base = f"{urlparse(ctx.root_page.url).scheme}://{urlparse(ctx.root_page.url).netloc}" if ctx.root_page else ctx.config.target
     results: list[Finding] = []
     for item in SENSITIVE_FILES:
+        target_url = base + item["path"]
+        if ctx.excluded(target_url):
+            continue
         try:
-            resp = await ctx.session.get(base + item["path"], max_bytes=200_000)
+            resp = await ctx.session.get(target_url, max_bytes=200_000)
         except ScanLimitReached:
             break
         if resp.error or resp.status != 200 or not resp.text:
@@ -561,10 +576,11 @@ async def check_sensitive_files(ctx: CheckContext) -> list[Finding]:
                 category="exposure",
                 description=f"访问 {item['path']} 返回 200 且匹配到敏感内容特征，确认该文件可被外部下载。",
                 remediation=item["remediation"],
-                url=base + item["path"],
+                url=target_url,
                 evidence=truncate(resp.text, 400),
                 cwe=item["cwe"],
                 owasp="A01:2021",
+                **capture(resp, url=target_url, headers=ctx.session.default_headers),
             )
         )
     return results
@@ -584,6 +600,8 @@ async def check_directory_listing(ctx: CheckContext) -> list[Finding]:
     results: list[Finding] = []
     for directory in directories:
         url = urlunparse((parsed_root.scheme, parsed_root.netloc, directory, "", "", ""))
+        if ctx.excluded(url):
+            continue
         try:
             resp = await ctx.session.get(url, max_bytes=300_000)
         except ScanLimitReached:
@@ -605,6 +623,7 @@ async def check_directory_listing(ctx: CheckContext) -> list[Finding]:
                     cwe="CWE-548",
                     owasp="A01:2021",
                     fingerprint=directory,
+                    **capture(resp, url=url, headers=ctx.session.default_headers),
                 )
             )
     return results
@@ -616,6 +635,8 @@ async def check_error_leak(ctx: CheckContext) -> list[Finding]:
     parsed = urlparse(ctx.root_page.url)
     random_path = "/vulnlens-" + "".join(random.choices(string.ascii_lowercase + string.digits, k=10))
     url = urlunparse((parsed.scheme, parsed.netloc, random_path, "", "", ""))
+    if ctx.excluded(url):
+        return []
     try:
         resp = await ctx.session.get(url, max_bytes=300_000)
     except ScanLimitReached:
@@ -638,6 +659,7 @@ async def check_error_leak(ctx: CheckContext) -> list[Finding]:
                     cwe="CWE-209",
                     owasp="A05:2021",
                     fingerprint=label,
+                    **capture(resp, url=url, headers=ctx.session.default_headers),
                 )
             ]
     return []
@@ -792,6 +814,308 @@ async def check_tech_cve(ctx: CheckContext) -> list[Finding]:
     return results
 
 
+JWT_RE = re.compile(r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
+JWT_SENSITIVE_CLAIMS = ("password", "passwd", "secret", "api_key", "apikey", "private_key", "access_key")
+
+
+def _jwt_decode(part: str) -> dict | None:
+    padded = part + "=" * (-len(part) % 4)
+    try:
+        data = base64.urlsafe_b64decode(padded.encode("ascii"))
+        parsed = json.loads(data.decode("utf-8", errors="replace"))
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def _jwt_tokens(ctx: CheckContext) -> list[tuple[str, str, str]]:
+    sources: list[tuple[str, str, str]] = []
+    for cookie in ctx.discovery.cookies:
+        sources.append((cookie.source_url, f"Cookie {cookie.name}", cookie.raw))
+    for source, text in list(ctx.discovery.js_text.items())[:40]:
+        sources.append((source.replace("inline:", ""), "前端代码", text))
+    tokens: list[tuple[str, str, str]] = []
+    seen: set[str] = set()
+    for source_url, label, text in sources:
+        for match in JWT_RE.finditer(text):
+            token = match.group(0)
+            if token in seen:
+                continue
+            seen.add(token)
+            tokens.append((source_url, label, token))
+    return tokens
+
+
+async def check_jwt(ctx: CheckContext) -> list[Finding]:
+    results: list[Finding] = []
+    for source_url, label, token in _jwt_tokens(ctx):
+        if len(results) >= 8:
+            break
+        header = _jwt_decode(token.split(".")[0])
+        payload = _jwt_decode(token.split(".")[1])
+        if not header or not payload:
+            continue
+        alg = str(header.get("alg") or "").lower()
+        token_hash = hashlib.sha1(token.encode("utf-8", errors="ignore")).hexdigest()[:8]
+        evidence = "Header: " + json.dumps(header, ensure_ascii=False) + "\nPayload: " + json.dumps(payload, ensure_ascii=False)
+        base = {
+            "category": "auth",
+            "confidence": "high",
+            "url": source_url,
+            "evidence": truncate(evidence, 600),
+            "owasp": "A07:2021",
+            "fingerprint": token_hash,
+        }
+        if alg in ("none", "") or "alg" not in header:
+            results.append(
+                finding(
+                    check_id="jwt.alg_none",
+                    title="JWT 未签名或使用 alg=none",
+                    severity="critical",
+                    description=f"在{label}中发现 JWT，其算法为 {alg or '缺失'}。服务端若接受该令牌，攻击者可自行伪造任意身份。",
+                    remediation="服务端强制校验签名算法白名单（如 RS256/HS256），拒绝 alg=none 与空签名；升级 JWT 库并校验 issuers/audience。",
+                    cwe="CWE-347",
+                    **base,
+                )
+            )
+        if "exp" not in payload:
+            results.append(
+                finding(
+                    check_id="jwt.no_exp",
+                    title="JWT 未设置过期时间",
+                    severity="medium",
+                    description=f"{label}中的 JWT 没有 exp 声明。令牌一旦泄露可长期使用，无法通过过期机制降低风险。",
+                    remediation="签发令牌时设置较短的 exp（如 15-60 分钟），并配合刷新令牌与吊销列表。",
+                    cwe="CWE-613",
+                    **base,
+                )
+            )
+        sensitive = [key for key in payload if str(key).lower() in JWT_SENSITIVE_CLAIMS]
+        if sensitive:
+            results.append(
+                finding(
+                    check_id="jwt.sensitive_claims",
+                    title="JWT 载荷包含敏感字段",
+                    severity="high",
+                    description=f"{label}中的 JWT 载荷包含敏感字段：{'、'.join(sensitive)}。JWT 仅做 Base64 编码，任何持有者都可直接读取。",
+                    remediation="不要把口令、密钥等敏感信息写入 JWT 载荷；只保留必要的标识与权限声明，服务端按需查询敏感数据。",
+                    cwe="CWE-522",
+                    **base,
+                )
+            )
+    return results
+
+
+async def _resolve_txt(domain: str) -> list[str] | None:
+    try:
+        import dns.asyncresolver
+    except Exception:
+        return None
+    try:
+        resolver = dns.asyncresolver.Resolver()
+        resolver.timeout = 3.0
+        resolver.lifetime = 4.0
+        answers = await resolver.resolve(domain, "TXT")
+    except Exception:
+        return []
+    records: list[str] = []
+    for rdata in answers:
+        text = rdata.to_text()
+        parts = re.findall(r'"([^"]*)"', text)
+        records.append("".join(parts) if parts else text.strip('"'))
+    return records
+
+
+async def check_email_dns(ctx: CheckContext) -> list[Finding]:
+    parsed = urlparse(ctx.config.target if "://" in ctx.config.target else "https://" + ctx.config.target)
+    host = parsed.hostname or ""
+    if not host or is_ip(host) or host == "localhost" or "." not in host:
+        return []
+    domain = base_domain(host)
+    records = await _resolve_txt(domain)
+    results: list[Finding] = []
+    if records is None:
+        return results
+
+    spf = [record for record in records if record.lower().startswith("v=spf1")]
+    if not spf:
+        results.append(
+            finding(
+                check_id="dns.spf_missing",
+                title="域名未配置 SPF 记录",
+                severity="low",
+                category="dns",
+                confidence="medium",
+                description=f"{domain} 的 TXT 记录中没有 v=spf1。若该域名用于收发邮件，攻击者更容易伪造发件人。",
+                remediation="配置 SPF，例如 v=spf1 include:_spf.example.com -all，将授权的发信服务器列入并通过 -all 拒绝其他来源。",
+                url=ctx.config.target,
+                evidence=f"TXT({domain}) 未匹配 v=spf1",
+                cwe="CWE-290",
+                owasp="A07:2021",
+                fingerprint="spf",
+            )
+        )
+    else:
+        if len(spf) > 1:
+            results.append(
+                finding(
+                    check_id="dns.spf_multiple",
+                    title="存在多条 SPF 记录",
+                    severity="medium",
+                    category="dns",
+                    confidence="high",
+                    description=f"{domain} 发布了 {len(spf)} 条 v=spf1 记录。多条 SPF 会导致校验失败，收件方可能直接判为伪造。",
+                    remediation="合并为唯一一条 SPF 记录，包含全部授权发信源。",
+                    url=ctx.config.target,
+                    evidence="\n".join(spf),
+                    cwe="CWE-290",
+                    fingerprint="spf-multiple",
+                )
+            )
+        if any(re.search(r"(?:^|\s)\+all(?:\s|$)", record, re.I) for record in spf):
+            results.append(
+                finding(
+                    check_id="dns.spf_allow_all",
+                    title="SPF 使用 +all，允许任意服务器发信",
+                    severity="high",
+                    category="dns",
+                    confidence="high",
+                    description=f"{domain} 的 SPF 以 +all 结尾，等于声明全世界任何服务器都可以代表该域名发信，SPF 防护形同虚设。",
+                    remediation="将 +all 改为 -all（严格拒绝）或 ~all（软失败），并确认授权发信源已全部列入。",
+                    url=ctx.config.target,
+                    evidence="\n".join(spf),
+                    cwe="CWE-290",
+                    owasp="A07:2021",
+                    fingerprint="spf-all",
+                )
+            )
+
+    dmarc_records = await _resolve_txt("_dmarc." + domain)
+    dmarc = [record for record in (dmarc_records or []) if record.lower().startswith("v=dmarc1")]
+    if not dmarc:
+        results.append(
+            finding(
+                check_id="dns.dmarc_missing",
+                title="域名未配置 DMARC 记录",
+                severity="low",
+                category="dns",
+                confidence="medium",
+                description=f"未在 _dmarc.{domain} 找到 DMARC 策略。缺少 DMARC 时，收件方无法依据域名所有者策略处置伪造邮件。",
+                remediation="发布 DMARC 记录，例如 _dmarc 的 TXT：v=DMARC1; p=none; rua=mailto:dmarc@example.com，先观察再逐步收紧到 quarantine/reject。",
+                url=ctx.config.target,
+                evidence=f"TXT(_dmarc.{domain}) 未匹配 v=DMARC1",
+                cwe="CWE-290",
+                owasp="A07:2021",
+                fingerprint="dmarc",
+            )
+        )
+    elif any("p=none" in record.replace(" ", "").lower() for record in dmarc):
+        results.append(
+            finding(
+                check_id="dns.dmarc_none",
+                title="DMARC 策略为 p=none（仅监控）",
+                severity="low",
+                category="dns",
+                confidence="high",
+                description=f"{domain} 的 DMARC 策略为 p=none，不会拦截伪造邮件，仅发送报告。",
+                remediation="确认报告数据后，将策略调整为 p=quarantine 或 p=reject，并配合 SPF/DKIM。",
+                url=ctx.config.target,
+                evidence="\n".join(dmarc),
+                cwe="CWE-290",
+                fingerprint="dmarc-none",
+            )
+        )
+    return results
+
+
+TAKEOVER_FINGERPRINTS = {
+    "github.io": ("GitHub Pages", "there isn't a github pages site here"),
+    "herokuapp.com": ("Heroku", "no such app"),
+    "s3.amazonaws.com": ("AWS S3", "nosuchbucket"),
+    "amazonaws.com": ("AWS S3", "nosuchbucket"),
+    "azurewebsites.net": ("Azure Web App", "error 404 - web app not found"),
+    "cloudfront.net": ("CloudFront", "bad request"),
+    "netlify.app": ("Netlify", "not found - request id"),
+    "surge.sh": ("Surge", "project not found"),
+    "readme.io": ("ReadMe", "project doesn't exist"),
+    "bitbucket.io": ("Bitbucket", "repository not found"),
+    "ghost.io": ("Ghost", "domain error"),
+    "fastly.net": ("Fastly", "fastly error: unknown domain"),
+}
+
+
+async def _resolve_cname(host: str) -> str:
+    try:
+        import dns.asyncresolver
+
+        resolver = dns.asyncresolver.Resolver()
+        resolver.timeout = 3.0
+        resolver.lifetime = 4.0
+        answers = await resolver.resolve(host, "CNAME")
+        return str(answers[0].target).rstrip(".").lower()
+    except Exception:
+        return ""
+
+
+async def check_subdomain_takeover(ctx: CheckContext) -> list[Finding]:
+    subdomains = [item for item in ctx.assets.subdomains if not ctx.excluded("https://" + item)][:10]
+    if not subdomains:
+        return []
+    results: list[Finding] = []
+    async with httpx.AsyncClient(
+        verify=False,
+        follow_redirects=True,
+        timeout=httpx.Timeout(8.0, connect=5.0),
+        trust_env=False,
+        proxy=ctx.config.proxy or None,
+        headers={"User-Agent": "VulnLens/1.1 (authorized takeover check)"},
+    ) as client:
+        for subdomain in subdomains:
+            cname = await _resolve_cname(subdomain)
+            if not cname:
+                continue
+            service = next((value for suffix, value in TAKEOVER_FINGERPRINTS.items() if cname.endswith(suffix)), None)
+            if service is None:
+                continue
+            name, marker = service
+            status = 0
+            body = ""
+            try:
+                resp = await client.get("https://" + subdomain)
+                status = resp.status_code
+                body = resp.text[:200_000]
+            except Exception:
+                try:
+                    resp = await client.get("http://" + subdomain)
+                    status = resp.status_code
+                    body = resp.text[:200_000]
+                except Exception:
+                    continue
+            matched = marker in body.lower()
+            if not matched and status != 404:
+                continue
+            results.append(
+                finding(
+                    check_id="takeover.dangling_cname",
+                    title=f"子域名可能被接管：{subdomain}",
+                    severity="high" if matched else "medium",
+                    category="dns",
+                    confidence="high" if matched else "low",
+                    description=(
+                        f"{subdomain} 的 CNAME 指向 {name}（{cname}），但该托管空间未绑定有效站点。"
+                        "攻击者可在第三方平台注册同名资源并接管该子域名，用于钓鱼或窃取 Cookie。"
+                    ),
+                    remediation=f"从 DNS 中删除指向 {cname} 的 CNAME，或在 {name} 平台重新绑定并占用该资源；建立子域名下线清理流程。",
+                    url="https://" + subdomain,
+                    evidence=f"CNAME: {subdomain} -> {cname}\nHTTP {status}\n匹配特征：{'是' if matched else '否（仅 404）'}",
+                    cwe="CWE-284",
+                    owasp="A05:2021",
+                    fingerprint=subdomain,
+                )
+            )
+    return results
+
+
 PASSIVE_CHECKS = [
     check_security_headers,
     check_cors,
@@ -807,4 +1131,7 @@ PASSIVE_CHECKS = [
     check_sourcemap,
     check_js_secrets,
     check_tech_cve,
+    check_jwt,
+    check_email_dns,
+    check_subdomain_takeover,
 ]

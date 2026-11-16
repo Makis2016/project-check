@@ -58,6 +58,7 @@ class HttpSession:
         ignore_tls: bool = False,
         headers: dict[str, str] | None = None,
         cookie: str = "",
+        proxy: str = "",
         timeout: float = 12.0,
         on_request: Callable[[int], Awaitable[None]] | None = None,
     ) -> None:
@@ -84,12 +85,16 @@ class HttpSession:
         if headers:
             default_headers.update(headers)
 
+        self.default_headers = dict(default_headers)
+        self.proxy = proxy
+
         self.client = httpx.AsyncClient(
             verify=not ignore_tls,
             follow_redirects=False,
             timeout=httpx.Timeout(timeout, connect=min(timeout, 8.0)),
             trust_env=False,
             headers=default_headers,
+            proxy=proxy or None,
             limits=httpx.Limits(max_connections=10, max_keepalive_connections=0),
         )
 

@@ -6,7 +6,7 @@ from urllib.parse import quote, urlparse
 
 from ..http_client import ScanLimitReached
 from ..models import Finding
-from .base import CheckContext, finding, replace_query_param, truncate
+from .base import CheckContext, capture, finding, replace_query_param, truncate
 
 DESTRUCTIVE = ("delete", "remove", "logout", "signout", "unsubscribe", "drop", "reset")
 
@@ -81,6 +81,7 @@ async def check_reflected_xss(ctx: CheckContext) -> list[Finding]:
                 cwe="CWE-79",
                 owasp="A03:2021",
                 fingerprint=param,
+                **capture(resp, url=target, headers=ctx.session.default_headers),
             )
         )
     return results
@@ -123,6 +124,7 @@ async def check_sqli_error(ctx: CheckContext) -> list[Finding]:
                 cwe="CWE-89",
                 owasp="A03:2021",
                 fingerprint=param,
+                **capture(resp, url=target, headers=ctx.session.default_headers),
             )
         )
     return results
@@ -164,6 +166,7 @@ async def check_open_redirect(ctx: CheckContext) -> list[Finding]:
                 cwe="CWE-601",
                 owasp="A01:2021",
                 fingerprint=param,
+                **capture(resp, url=target, headers=ctx.session.default_headers),
             )
         )
     return results

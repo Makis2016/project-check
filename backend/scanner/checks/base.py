@@ -5,10 +5,85 @@ from typing import Awaitable, Callable
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from ..assets import AssetReport
-from ..http_client import HttpSession
+from ..exclude import is_excluded
+from ..http_client import HttpSession, ResponseData
 from ..models import Discovery, Endpoint, Finding, ScanConfig
 
 LogFn = Callable[[str, str], Awaitable[None]]
+
+SENSITIVE_HEADERS = {"cookie", "authorization", "x-api-key", "x-auth-token", "set-cookie"}
+
+
+def mask_value(value: str) -> str:
+    value = (value or "").strip()
+    if len(value) <= 10:
+        return value[:3] + "***"
+    return value[:10] + "***" + value[-4:]
+
+
+def format_request(method: str, url: str, headers: dict[str, str] | None = None, body: str = "") -> str:
+    parsed = urlparse(url)
+    target = parsed.path or "/"
+    if parsed.query:
+        target += "?" + parsed.query
+    lines = [f"{method.upper()} {target} HTTP/1.1", f"Host: {parsed.netloc}"]
+    for name, value in (headers or {}).items():
+        lowered = name.lower()
+        if lowered in ("host", "connection", "content-length"):
+            continue
+        shown = mask_value(value) if lowered in SENSITIVE_HEADERS else value
+        lines.append(f"{name}: {shown}")
+    lines.append("")
+    if body:
+        lines.append(body)
+    return "\n".join(lines)[:6000]
+
+
+def format_response(resp: ResponseData, body_limit: int = 900) -> str:
+    lines = [f"HTTP/1.1 {resp.status}"]
+    interesting = [
+        "server", "content-type", "content-length", "location", "content-encoding",
+        "access-control-allow-origin", "access-control-allow-credentials",
+        "www-authenticate", "x-powered-by",
+    ]
+    for name in interesting:
+        value = resp.headers.get(name)
+        if value:
+            lines.append(f"{name.title()}: {mask_value(value) if name == 'www-authenticate' else value}")
+    if resp.set_cookie:
+        lines.append("Set-Cookie: " + mask_value(resp.set_cookie[0]))
+    lines.append("")
+    if resp.text:
+        lines.append(truncate(resp.text, body_limit))
+    return "\n".join(lines)[:6000]
+
+
+def build_curl(method: str, url: str, headers: dict[str, str] | None = None) -> str:
+    parts = ["curl -i -sS", "-X", method.upper(), f"'{url}'"]
+    for name, value in (headers or {}).items():
+        lowered = name.lower()
+        if lowered in ("connection", "content-length"):
+            continue
+        shown = mask_value(value) if lowered in SENSITIVE_HEADERS else value
+        parts.append(f"-H '{name}: {shown}'")
+    return " ".join(parts)
+
+
+def capture(
+    resp: ResponseData,
+    *,
+    method: str = "GET",
+    url: str = "",
+    headers: dict[str, str] | None = None,
+    body: str = "",
+) -> dict[str, str]:
+    """生成用于复现的请求、响应原文与 cURL。"""
+    target = url or resp.url
+    return {
+        "request": format_request(method, target, headers, body),
+        "response": format_response(resp),
+        "curl": build_curl(method, target, headers),
+    }
 
 
 @dataclass
@@ -27,11 +102,20 @@ class CheckContext:
     def root_page(self):
         return next(iter(self.discovery.pages.values()), None)
 
+    def excluded(self, url: str) -> bool:
+        return is_excluded(url, self.config.exclude_paths)
+
     def param_candidates(self, limit: int = 40) -> list[tuple[str, str]]:
         seen: set[tuple[str, str, str, str]] = set()
         candidates: list[tuple[str, str]] = []
-        for endpoint in self.discovery.endpoints.values():
+        endpoints = sorted(
+            self.discovery.endpoints.values(),
+            key=lambda item: (0 if "openapi" in item.source else 1, item.url),
+        )
+        for endpoint in endpoints:
             if endpoint.method.upper() != "GET":
+                continue
+            if self.excluded(endpoint.url):
                 continue
             parsed = urlparse(endpoint.url)
             for name in parse_qs(parsed.query).keys():
@@ -43,6 +127,8 @@ class CheckContext:
                 return candidates
         for form in self.discovery.forms:
             if form.method.upper() != "GET":
+                continue
+            if self.excluded(form.action):
                 continue
             parsed = urlparse(form.action)
             for name in form.inputs:
@@ -89,6 +175,9 @@ def finding(
     owasp: str = "",
     references: list[str] | None = None,
     fingerprint: str = "",
+    request: str = "",
+    response: str = "",
+    curl: str = "",
 ) -> Finding:
     return Finding(
         check_id=check_id,
@@ -106,6 +195,9 @@ def finding(
         owasp=owasp,
         references=references or [],
         fingerprint=fingerprint,
+        request=request,
+        response=response,
+        curl=curl,
     )
 
 

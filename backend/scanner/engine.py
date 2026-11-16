@@ -59,8 +59,13 @@ class ScanEngine:
                 ignore_tls=self.config.ignore_tls,
                 headers=self.config.headers,
                 cookie=self.config.cookie,
+                proxy=self.config.proxy,
                 on_request=self._on_request,
             )
+            if self.config.proxy:
+                await self.log("info", f"已通过代理发起请求：{self.config.proxy}")
+            if self.config.exclude_paths:
+                await self.log("info", f"排除规则：{'、'.join(self.config.exclude_paths)}")
 
             await self.progress(0.02, "assets", "资产探测")
             assets = await run_assets(self.config, self.log)
