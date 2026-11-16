@@ -6,11 +6,14 @@
 
 - 资产：DNS 解析、常见端口探测、TLS 证书与协议、子域名枚举与 CNAME 接管指纹
 - 发现：爬虫、robots/sitemap、OpenAPI/Swagger 文档解析与参数注入、表单、JS 中的接口路径
-- 检测：安全响应头、CORS、Cookie 标记、HTTP 方法、敏感文件、目录列表、错误泄露、SourceMap、JS 密钥、JWT、SPF/DMARC、组件指纹与内置 CVE 匹配
+- 检测：安全响应头、Host 头注入、CORS、Cookie 标记、CSRF Token 缺失、HTTP 方法、敏感文件与备份/交换文件、目录列表、错误泄露、SourceMap、JS 密钥、JWT、GraphQL introspection、SPF/DMARC、组件指纹与内置 CVE 匹配
+- 质量巡检（可选）：坏链、5xx、混合内容、静态资源与 JS 加载失败
 - 主动验证（可选）：反射型 XSS、报错型 SQL 注入、开放重定向
+- 登录态检测（可选）：未授权接口访问、双账号 IDOR/越权
+- 高风险验证（默认关闭）：SSRF、路径穿越/文件读取、命令注入、SSTI、HTTP 请求走私、存储型 XSS
 - 复现与对比：请求/响应原文、复制 cURL、HTTP/SOCKS5 代理、排除路径与域名、历史扫描 diff
 
-不包含爆破、盲注、认证绕过等高风险行为。
+高风险验证可能写入测试数据或影响目标，仅限已授权环境；不包含密码爆破、全量目录爆破与自动 getshell。
 
 ## 开发运行
 

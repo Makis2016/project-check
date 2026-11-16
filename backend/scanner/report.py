@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from .models import SEVERITIES, SEVERITY_LABEL
 
-REPORT_VERSION = "1.1.0"
+REPORT_VERSION = "1.2.0"
 
 DISCLAIMER = (
     "本报告由 VulnLens 在本机对授权目标执行自动化检查生成。自动化结果可能存在误报或漏报，"
@@ -188,6 +188,8 @@ def _public_config(config: dict[str, Any]) -> dict[str, Any]:
     data = dict(config or {})
     if data.get("cookie"):
         data["cookie"] = _mask_secret(str(data["cookie"]))
+    if data.get("secondary_cookie"):
+        data["secondary_cookie"] = _mask_secret(str(data["secondary_cookie"]))
     proxy = str(data.get("proxy") or "")
     if "@" in proxy:
         parsed = urlparse(proxy)

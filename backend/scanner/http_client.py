@@ -4,7 +4,7 @@ import asyncio
 import time
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
@@ -122,18 +122,22 @@ class HttpSession:
         headers: dict[str, str] | None = None,
         data: Any = None,
         json: Any = None,
+        cookie: str | None = None,
     ) -> ResponseData:
         current_url = url
         current_method = method.upper()
         history: list[int] = []
         started = time.monotonic()
+        request_headers = dict(headers or {})
+        if cookie is not None:
+            request_headers["Cookie"] = cookie
 
         for hop in range(max_redirects + 1):
             await self._throttle()
             async with self._semaphore:
                 try:
                     async with self.client.stream(
-                        current_method, current_url, headers=headers, data=data, json=json
+                        current_method, current_url, headers=request_headers, data=data, json=json
                     ) as response:
                         chunks: list[bytes] = []
                         size = 0
@@ -159,6 +163,9 @@ class HttpSession:
                         ):
                             history.append(response.status_code)
                             current_url = urljoin(current_url, resp_headers["location"])
+                            if urlparse(current_url).netloc.lower() != urlparse(str(response.url)).netloc.lower():
+                                request_headers.pop("Cookie", None)
+                                request_headers.pop("Authorization", None)
                             if response.status_code in (301, 302, 303) and current_method not in ("GET", "HEAD"):
                                 current_method = "GET"
                                 data = None

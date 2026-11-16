@@ -8,7 +8,7 @@ from typing import Any, Awaitable, Callable
 from .. import db
 
 from .assets import run_assets
-from .checks import ACTIVE_CHECKS, PASSIVE_CHECKS, CheckContext
+from .checks import ACTIVE_CHECKS, AUTH_CHECKS, INTRUSIVE_CHECKS, PASSIVE_CHECKS, CheckContext
 from .crawler import CrawlError, Crawler
 from .http_client import HttpSession, ScanLimitReached
 from .models import Finding, ScanConfig, Summary, SEVERITIES
@@ -124,9 +124,43 @@ class ScanEngine:
                         for item in results:
                             await self.emit({"type": "finding", "finding": item.to_dict()})
                     findings.extend(results)
-                    await self.progress(0.87 + 0.1 * (index / max(len(ACTIVE_CHECKS), 1)), "active", "主动验证")
+                    await self.progress(0.87 + 0.04 * (index / max(len(ACTIVE_CHECKS), 1)), "active", "主动验证")
             else:
                 await self.log("info", "主动验证已关闭，仅执行配置类检测")
+
+            if self.config.auth_checks:
+                await self.progress(0.91, "auth", "登录态对比")
+                for index, check in enumerate(AUTH_CHECKS, start=1):
+                    try:
+                        results = await check(ctx)
+                    except ScanLimitReached:
+                        await self.log("warn", "请求预算耗尽，跳过登录态对比")
+                        break
+                    except Exception as exc:
+                        await self.log("warn", f"登录态检测器 {check.__name__} 异常：{exc}")
+                        continue
+                    if results:
+                        for item in results:
+                            await self.emit({"type": "finding", "finding": item.to_dict()})
+                    findings.extend(results)
+                    await self.progress(0.91 + 0.02 * (index / max(len(AUTH_CHECKS), 1)), "auth", "登录态对比")
+
+            if self.config.intrusive_checks:
+                await self.progress(0.93, "intrusive", "高风险验证")
+                for index, check in enumerate(INTRUSIVE_CHECKS, start=1):
+                    try:
+                        results = await check(ctx)
+                    except ScanLimitReached:
+                        await self.log("warn", "请求预算耗尽，跳过高风险验证")
+                        break
+                    except Exception as exc:
+                        await self.log("warn", f"高风险检测器 {check.__name__} 异常：{exc}")
+                        continue
+                    if results:
+                        for item in results:
+                            await self.emit({"type": "finding", "finding": item.to_dict()})
+                    findings.extend(results)
+                    await self.progress(0.93 + 0.04 * (index / max(len(INTRUSIVE_CHECKS), 1)), "intrusive", "高风险验证")
 
             await self.progress(0.98, "report", "生成报告")
             findings = self._dedupe(findings)

@@ -1,21 +1,33 @@
 """故意存在漏洞的本地靶站，仅用于验证检测器，不对外网提供服务。"""
 
+from urllib.parse import parse_qs
+
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
+GUESTBOOK: list[str] = []
+
 ROOT_HTML = """<!doctype html>
 <html><head><title>Acme Portal</title>
 <script src="/static/jquery-1.7.1.min.js"></script>
 <script src="/static/app.js"></script>
+<script src="/static/missing.js"></script>
 </head><body>
 <h1>Acme Portal</h1>
 <a href="/search?q=hello">Search</a>
 <a href="/redirect?next=/page">Next</a>
 <a href="/page">Page</a>
 <a href="/static/">Static files</a>
+<a href="/graphql">GraphQL</a>
+<a href="/fetch?url=http://example.com/logo.png">Fetch</a>
+<a href="/download?file=readme.txt">Download</a>
+<a href="/ping?host=127.0.0.1">Ping</a>
+<a href="/api/orders/1">Order 1</a>
+<a href="/missing-page">Broken link</a>
 <form action="/search" method="get"><input name="q" placeholder="keyword"></form>
+<form action="/guestbook" method="post"><input name="comment" placeholder="leave a note"></form>
 </body></html>"""
 
 
@@ -36,8 +48,9 @@ async def insecure_middleware(request: Request, call_next):
 
 
 @app.get("/", response_class=HTMLResponse)
-async def root() -> str:
-    return ROOT_HTML
+async def root(request: Request) -> str:
+    reflected = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+    return ROOT_HTML.replace("</body>", f"<div style='display:none'>host:{reflected}</div></body>")
 
 
 @app.get("/page", response_class=HTMLResponse)
@@ -142,6 +155,78 @@ async def jquery() -> Response:
 @app.get("/actuator/env")
 async def actuator_env() -> JSONResponse:
     return JSONResponse({"activeProfiles": ["prod"], "propertySources": [{"name": "systemProperties"}]})
+
+
+@app.get("/graphql")
+async def graphql_get() -> Response:
+    return Response(status_code=405)
+
+
+@app.post("/graphql")
+async def graphql_probe() -> JSONResponse:
+    return JSONResponse(
+        {
+            "data": {
+                "__schema": {
+                    "queryType": {"name": "Query"},
+                    "types": [{"name": "Query", "kind": "OBJECT"}],
+                }
+            }
+        }
+    )
+
+
+@app.get("/api/orders/{order_id}")
+async def order_detail(order_id: str) -> JSONResponse:
+    return JSONResponse(
+        {
+            "order_id": order_id,
+            "email": "alice@example.com",
+            "phone": "13800000000",
+            "total": 99,
+        }
+    )
+
+
+@app.get("/fetch", response_class=PlainTextResponse)
+async def fetch_url(url: str = "") -> str:
+    if "169.254.169.254" in url:
+        return "ami-id: i-123456\ninstance-id: i-abcdef\niam/security-credentials/role\n"
+    return "fetched ok"
+
+
+@app.get("/download", response_class=PlainTextResponse)
+async def download(file: str = "") -> str:
+    if "etc/passwd" in file:
+        return "root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n"
+    return "readme content"
+
+
+@app.get("/ping", response_class=PlainTextResponse)
+async def ping(host: str = "") -> str:
+    if "471253" in host:
+        return "1384824"
+    return "pong"
+
+
+@app.post("/guestbook")
+async def guestbook_post(request: Request) -> RedirectResponse:
+    body = (await request.body()).decode("utf-8", errors="replace")
+    comment = (parse_qs(body).get("comment") or [""])[0]
+    if comment:
+        GUESTBOOK.append(comment)
+    return RedirectResponse("/guestbook", status_code=303)
+
+
+@app.get("/guestbook", response_class=HTMLResponse)
+async def guestbook() -> str:
+    entries = "".join(f"<p>{item}</p>" for item in GUESTBOOK)
+    return f"<html><body><h1>Guestbook</h1>{entries}<a href='/'>back</a></body></html>"
+
+
+@app.get("/index.php.bak", response_class=PlainTextResponse)
+async def index_backup() -> str:
+    return "<?php echo 'Acme'; ?>\n"
 
 
 @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "TRACE"])

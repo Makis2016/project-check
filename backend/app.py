@@ -18,7 +18,7 @@ from .scanner.engine import ScanEngine
 from .scanner.models import SEVERITIES, build_config, new_scan_id
 from .scanner.report import build_csv, build_html, build_json, build_markdown
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 

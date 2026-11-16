@@ -105,7 +105,7 @@ export default function App() {
         </div>
 
         <div className="sidebar-foot">
-          <span className="version">v1.1.0</span>
+          <span className="version">v1.2.0</span>
           <span className="dot-sep" />
           <span>本地运行</span>
         </div>

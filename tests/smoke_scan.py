@@ -55,6 +55,11 @@ async def main() -> int:
             scan_ports=False,
             subdomain_enum=False,
             active_checks=True,
+            cookie="sessionid=smoke",
+            secondary_cookie="sessionid=other",
+            quality_checks=True,
+            auth_checks=True,
+            intrusive_checks=True,
         )
         state = {"value": "running"}
 
@@ -149,6 +154,19 @@ async def main() -> int:
             "active.sqli_error",
             "active.open_redirect",
             "jwt.no_exp",
+            "exposure.graphql",
+            "headers.host_injection",
+            "csrf.missing_token",
+            "exposure.backup_file",
+            "quality.js_load_error",
+            "quality.broken_link",
+            "quality.server_error",
+            "auth.unauthorized_api",
+            "auth.idor",
+            "active.stored_xss",
+            "active.ssrf",
+            "active.path_traversal",
+            "active.command_injection",
         }
         missing = expected - ids
         print("missing:", sorted(missing) if missing else "none")

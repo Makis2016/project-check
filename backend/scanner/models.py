@@ -35,10 +35,14 @@ class ScanConfig:
     subdomain_enum: bool = False
     active_checks: bool = True
     api_scan: bool = True
+    quality_checks: bool = True
+    auth_checks: bool = False
+    intrusive_checks: bool = False
     ignore_tls: bool = False
     max_js_files: int = 40
     proxy: str = ""
     exclude_paths: list[str] = field(default_factory=list)
+    secondary_cookie: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -53,6 +57,7 @@ PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
         "subdomain_enum": False,
         "active_checks": False,
         "api_scan": False,
+        "quality_checks": False,
         "max_js_files": 20,
     },
     "standard": {
@@ -63,6 +68,7 @@ PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
         "subdomain_enum": False,
         "active_checks": True,
         "api_scan": True,
+        "quality_checks": True,
         "max_js_files": 40,
     },
     "deep": {
@@ -73,6 +79,7 @@ PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
         "subdomain_enum": True,
         "active_checks": True,
         "api_scan": True,
+        "quality_checks": True,
         "max_js_files": 80,
         "ports": EXTENDED_PORTS,
     },
@@ -113,10 +120,14 @@ def build_config(payload: dict[str, Any]) -> ScanConfig:
         subdomain_enum=bool(payload.get("subdomain_enum", defaults["subdomain_enum"])),
         active_checks=bool(payload.get("active_checks", defaults["active_checks"])),
         api_scan=bool(payload.get("api_scan", defaults.get("api_scan", True))),
+        quality_checks=bool(payload.get("quality_checks", defaults.get("quality_checks", True))),
+        auth_checks=bool(payload.get("auth_checks")),
+        intrusive_checks=bool(payload.get("intrusive_checks")),
         ignore_tls=bool(payload.get("ignore_tls")),
         max_js_files=int(payload.get("max_js_files") or defaults["max_js_files"]),
         proxy=str(payload.get("proxy") or "").strip(),
         exclude_paths=_parse_exclude(payload.get("exclude_paths")),
+        secondary_cookie=str(payload.get("secondary_cookie") or "").strip()[:6000],
     )
     cfg.rate_limit = min(max(cfg.rate_limit, 0.5), 30.0)
     cfg.max_pages = min(max(cfg.max_pages, 1), 500)

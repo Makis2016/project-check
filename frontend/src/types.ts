@@ -79,6 +79,10 @@ export interface ScanConfig {
   subdomain_enum: boolean;
   active_checks: boolean;
   api_scan: boolean;
+  quality_checks: boolean;
+  auth_checks: boolean;
+  intrusive_checks: boolean;
+  secondary_cookie: string;
   ignore_tls: boolean;
   ports: number[];
   cookie: string;
@@ -129,6 +133,10 @@ export interface ScanPayload {
   api_scan?: boolean;
   scan_ports?: boolean;
   subdomain_enum?: boolean;
+  quality_checks?: boolean;
+  auth_checks?: boolean;
+  intrusive_checks?: boolean;
+  secondary_cookie?: string;
   ignore_tls?: boolean;
   ports?: number[];
   proxy?: string;

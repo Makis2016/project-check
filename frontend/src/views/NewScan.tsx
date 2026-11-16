@@ -45,6 +45,10 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
   const [subdomains, setSubdomains] = useState(false);
   const [ignoreTls, setIgnoreTls] = useState(false);
   const [apiScan, setApiScan] = useState(true);
+  const [qualityChecks, setQualityChecks] = useState(true);
+  const [authChecks, setAuthChecks] = useState(false);
+  const [intrusiveChecks, setIntrusiveChecks] = useState(false);
+  const [secondaryCookie, setSecondaryCookie] = useState("");
   const [proxy, setProxy] = useState("");
   const [excludeText, setExcludeText] = useState("");
   const [error, setError] = useState("");
@@ -60,6 +64,7 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
     setScanPorts(id !== "quick");
     setSubdomains(id === "deep");
     setApiScan(id !== "quick");
+    setQualityChecks(id !== "quick");
   };
 
   const parseHeaders = (): Record<string, string> => {
@@ -117,6 +122,10 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
         rate_limit: rate,
         active_checks: activeChecks,
         api_scan: apiScan,
+        quality_checks: qualityChecks,
+        auth_checks: authChecks,
+        intrusive_checks: intrusiveChecks,
+        secondary_cookie: secondaryCookie.trim() || undefined,
         scan_ports: scanPorts,
         ports: parsePorts(),
         subdomain_enum: subdomains,
@@ -212,7 +221,7 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
         <button className="advanced-toggle" onClick={() => setAdvanced((value) => !value)}>
           <span className={`toggle-arrow ${advanced ? "open" : ""}`}>›</span>
           高级选项
-          <span className="advanced-sub">会话 Cookie、代理、排除路径、限速、端口</span>
+          <span className="advanced-sub">会话 Cookie、双账号对比、质量巡检、风险开关、代理、排除路径</span>
         </button>
 
         {advanced ? (
@@ -240,6 +249,17 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
                   spellCheck={false}
                 />
                 <span className="hint">每行一个，格式 Key: Value</span>
+              </label>
+              <label className="field">
+                <span className="label">第二账号 Cookie（越权对比，可选）</span>
+                <input
+                  className="input mono"
+                  placeholder="sessionid=另一个账号的会话"
+                  value={secondaryCookie}
+                  onChange={(event) => setSecondaryCookie(event.target.value)}
+                  spellCheck={false}
+                />
+                <span className="hint">填写后开启双账号 IDOR/越权对比；需同时填写上方主账号 Cookie</span>
               </label>
             </div>
 
@@ -309,6 +329,21 @@ export default function NewScan({ initialTarget = "", onStart }: Props) {
                   <input type="checkbox" checked={apiScan} onChange={(e) => setApiScan(e.target.checked)} />
                   <span className="switch" />
                   接口文档参数扫描（OpenAPI）
+                </label>
+                <label className="switch-row">
+                  <input type="checkbox" checked={qualityChecks} onChange={(e) => setQualityChecks(e.target.checked)} />
+                  <span className="switch" />
+                  页面质量巡检（坏链 / 5xx / 资源加载）
+                </label>
+                <label className="switch-row">
+                  <input type="checkbox" checked={authChecks} onChange={(e) => setAuthChecks(e.target.checked)} />
+                  <span className="switch" />
+                  登录态对比（未授权 / IDOR）
+                </label>
+                <label className="switch-row">
+                  <input type="checkbox" checked={intrusiveChecks} onChange={(e) => setIntrusiveChecks(e.target.checked)} />
+                  <span className="switch" />
+                  高风险验证（SSRF / LFI / 注入 / 存储型 XSS，可能写入数据）
                 </label>
                 <label className="switch-row">
                   <input type="checkbox" checked={subdomains} onChange={(e) => setSubdomains(e.target.checked)} />
