@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Scan, Severity } from "../types";
-import { reportUrl } from "../api";
+import { desktopBridge, fetchReport } from "../api";
 import FindingCard from "../components/FindingCard";
 import { SEVERITY_META, SEVERITY_ORDER, SeverityBadge, SeveritySummary } from "../components/Severity";
 import { AlertIcon, DownloadIcon, LinkIcon, RefreshIcon, SearchIcon, ServerIcon } from "../components/Icons";
@@ -26,6 +26,43 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
   const [tab, setTab] = useState<Tab>("findings");
   const [severity, setSeverity] = useState<"all" | Severity>("all");
   const [query, setQuery] = useState("");
+  const [exporting, setExporting] = useState(false);
+  const [exportNote, setExportNote] = useState("");
+  const [exportFailed, setExportFailed] = useState(false);
+
+  const handleExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    setExportNote("");
+    setExportFailed(false);
+    try {
+      const text = await fetchReport(scan.id);
+      const filename = `vulnlens-${scan.id}.md`;
+      const bridge = desktopBridge();
+      if (bridge?.save_report) {
+        const result = await bridge.save_report(filename, text);
+        if (result?.cancelled) return;
+        if (!result?.ok) throw new Error(result?.error || "保存失败");
+        setExportNote(`已保存到 ${result.path ?? filename}`);
+      } else {
+        const blob = new Blob([text], { type: "text/markdown;charset=utf-8" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+        setExportNote("已导出 Markdown");
+      }
+    } catch (error) {
+      setExportFailed(true);
+      setExportNote(error instanceof Error ? error.message : "导出失败，请重试");
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const summary = scan.summary;
   const findings = scan.findings ?? [];
@@ -83,9 +120,10 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
           </div>
         </div>
         <div className="report-actions">
-          <a className="btn" href={reportUrl(scan.id)} download>
-            <DownloadIcon width={16} height={16} /> 导出 Markdown
-          </a>
+          <span className={`export-note ${exportFailed ? "is-error" : ""}`}>{exportNote}</span>
+          <button className="btn" onClick={handleExport} disabled={exporting}>
+            <DownloadIcon width={16} height={16} /> {exporting ? "导出中…" : "导出 Markdown"}
+          </button>
           <button className="btn btn-primary" onClick={() => onRescan(scan.target)}>
             <RefreshIcon width={16} height={16} /> 重新扫描
           </button>

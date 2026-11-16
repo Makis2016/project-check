@@ -44,6 +44,26 @@ export function reportUrl(id: string): string {
   return `${BASE}/api/scans/${id}/report.md`;
 }
 
+export async function fetchReport(id: string): Promise<string> {
+  const response = await fetch(reportUrl(id));
+  if (!response.ok) {
+    throw new Error(`导出失败（${response.status}）`);
+  }
+  return response.text();
+}
+
+interface DesktopBridge {
+  save_report?: (
+    filename: string,
+    content: string,
+  ) => Promise<{ ok: boolean; path?: string; cancelled?: boolean; error?: string }>;
+}
+
+export function desktopBridge(): DesktopBridge | null {
+  const bridge = (window as unknown as { pywebview?: { api?: DesktopBridge } }).pywebview;
+  return bridge?.api ?? null;
+}
+
 export function streamScan(
   id: string,
   onEvent: (event: ScanEvent) => void,

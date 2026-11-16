@@ -1452,8 +1452,25 @@ input[type="range"] {
 
 .report-actions {
   display: flex;
+  align-items: center;
   gap: 9px;
   padding-top: 24px;
+}
+
+.export-note {
+  font-size: 12px;
+  color: var(--accent);
+  max-width: 260px;
+  line-height: 1.4;
+  text-align: right;
+}
+
+.export-note.is-error {
+  color: var(--critical);
+}
+
+.export-note:empty {
+  display: none;
 }
 
 .summary-grid {

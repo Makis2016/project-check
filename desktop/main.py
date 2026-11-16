@@ -72,6 +72,31 @@ def run_browser_mode(url: str) -> int:
         return 0
 
 
+class DesktopApi:
+    """暴露给前端的本地能力（窗口内 JS 通过 window.pywebview.api 调用）。"""
+
+    def save_report(self, filename: str, content: str) -> dict:
+        import webview
+
+        windows = webview.windows
+        if not windows:
+            return {"ok": False, "error": "窗口不可用"}
+
+        dialog = getattr(webview, "FileDialog", None)
+        save_dialog = dialog.SAVE if dialog is not None else webview.SAVE_DIALOG
+        selected = windows[0].create_file_dialog(
+            save_dialog,
+            save_filename=filename,
+            file_types=("Markdown (*.md)",),
+        )
+        if not selected:
+            return {"ok": False, "cancelled": True}
+
+        path = selected[0] if isinstance(selected, (list, tuple)) else selected
+        Path(path).write_text(content, encoding="utf-8")
+        return {"ok": True, "path": str(path)}
+
+
 def main(port: int | None = None) -> int:
     port = port or free_port()
     start_server(port)
@@ -96,6 +121,7 @@ def main(port: int | None = None) -> int:
             height=900,
             min_size=(1024, 720),
             background_color="#060a0f",
+            js_api=DesktopApi(),
         )
         webview.start()
         return 0
