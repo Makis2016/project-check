@@ -96,8 +96,10 @@ async def create_scan(request: Request) -> dict:
     if not payload.get("authorization_confirmed"):
         raise HTTPException(status_code=400, detail="请先确认：你拥有该目标的所有权或已获得扫描授权")
 
-    scan_type = "linux" if payload.get("scan_type") == "linux" else "web"
-    if scan_type == "linux":
+    scan_type = str(payload.get("scan_type") or "web")
+    if scan_type not in ("web", "linux", "windows"):
+        scan_type = "web"
+    if scan_type in ("linux", "windows"):
         host = validate_ssh_target(payload.get("target", ""))
         ssh_user = str(payload.get("ssh_user") or "").strip()
         if not ssh_user:
@@ -108,7 +110,7 @@ async def create_scan(request: Request) -> dict:
             raise HTTPException(status_code=400, detail="请填写 SSH 密码或私钥路径")
         if key_path and not Path(key_path).expanduser().is_file():
             raise HTTPException(status_code=400, detail="私钥文件不存在，请检查路径")
-        config = build_config({**payload, "target": host, "scan_type": "linux"})
+        config = build_config({**payload, "target": host, "scan_type": scan_type})
         target = f"ssh://{ssh_user}@{host}:{config.ssh_port}"
     else:
         target = validate_target(payload.get("target", ""))
@@ -125,7 +127,7 @@ async def create_scan(request: Request) -> dict:
         if len(runner.buffer) > 6000:
             del runner.buffer[:1000]
 
-    engine = HostScanEngine(scan_id, config, emit) if scan_type == "linux" else ScanEngine(scan_id, config, emit)
+    engine = HostScanEngine(scan_id, config, emit) if scan_type in ("linux", "windows") else ScanEngine(scan_id, config, emit)
 
     async def run_engine() -> None:
         try:

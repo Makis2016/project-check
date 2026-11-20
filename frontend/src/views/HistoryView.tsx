@@ -82,6 +82,8 @@ export default function HistoryView({ onOpen, onNew }: Props) {
           {scans.map((scan) => {
             const risk = riskLevel(scan.summary);
             const total = scan.summary?.total ?? 0;
+            const scanType = scan.config?.scan_type;
+            const isHost = scanType === "linux" || scanType === "windows";
             return (
               <article key={scan.id} className="history-row" onClick={() => onOpen(scan.id)}>
                 <div className="history-main">
@@ -93,12 +95,12 @@ export default function HistoryView({ onOpen, onNew }: Props) {
                   <div className="history-sub mono">{scan.target}</div>
                   <div className="history-meta">
                     <span>{formatTime(scan.created_at)}</span>
-                    <span>{scan.config?.scan_type === "linux" ? "主机巡检" : PRESET_LABEL[scan.preset] ?? scan.preset}</span>
+                    <span>
+                      {scanType === "windows" ? "Windows 巡检" : scanType === "linux" ? "Linux 巡检" : PRESET_LABEL[scan.preset] ?? scan.preset}
+                    </span>
                     <span>{formatDuration(scan.summary?.duration_ms)}</span>
                     <span>
-                      {scan.config?.scan_type === "linux"
-                        ? `${scan.summary?.update_count ?? 0} 待更新`
-                        : `${scan.summary?.endpoint_count ?? 0} 接口`}
+                      {isHost ? `${scan.summary?.update_count ?? 0} 待更新` : `${scan.summary?.endpoint_count ?? 0} 接口`}
                     </span>
                   </div>
                 </div>

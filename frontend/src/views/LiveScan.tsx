@@ -38,7 +38,7 @@ export default function LiveScan({ scanId, target, preset, scanType, onDone }: P
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [progress, setProgress] = useState(0);
-  const isHost = scanType === "linux" || target.startsWith("ssh://");
+  const isHost = scanType === "linux" || scanType === "windows" || target.startsWith("ssh://");
   const phases = isHost ? HOST_PHASES : PHASES;
   const [phase, setPhase] = useState(isHost ? "connect" : "assets");
   const [stats, setStats] = useState({ requests: 0, elapsed: 0 });

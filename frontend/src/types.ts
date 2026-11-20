@@ -33,6 +33,7 @@ export interface Summary {
   request_count: number;
   duration_ms: number;
   package_count?: number;
+  hotfix_count?: number;
   update_count?: number;
   service_count?: number;
 }
@@ -94,6 +95,19 @@ export interface HostListener {
   exposed: boolean;
 }
 
+export interface HostHotfix {
+  id: string;
+  description: string;
+  installed_on: string;
+}
+
+export interface HostDefender {
+  present?: boolean;
+  antivirus?: boolean;
+  realtime?: boolean;
+  signature_age_days?: number | null;
+}
+
 export interface Discovery {
   endpoints: Endpoint[];
   tech: Tech[];
@@ -102,12 +116,22 @@ export interface Discovery {
   js_files: string[];
   host?: HostInfo;
   packages?: { name: string; version: string }[];
+  hotfixes?: HostHotfix[];
   updates?: HostUpdate[];
   services?: string[];
   listeners?: HostListener[];
   ssh?: Record<string, string>;
-  firewall?: { active?: boolean; ufw?: boolean; firewalld?: boolean; nft?: boolean; iptables?: boolean };
+  firewall?: {
+    active?: boolean;
+    ufw?: boolean;
+    firewalld?: boolean;
+    nft?: boolean;
+    iptables?: boolean;
+    profiles?: { name: string; enabled: boolean }[];
+  };
   security_modules?: { selinux?: string; apparmor?: string };
+  defender?: HostDefender;
+  smb1_enabled?: boolean;
   uid0_accounts?: string[];
   reboot_required?: boolean;
   autoupdate?: boolean;
@@ -117,7 +141,7 @@ export interface Discovery {
 export interface ScanConfig {
   target: string;
   preset: string;
-  scan_type?: "web" | "linux";
+  scan_type?: "web" | "linux" | "windows";
   ssh_port?: number;
   ssh_user?: string;
   ssh_key_path?: string;
@@ -173,7 +197,7 @@ export interface LogEntry {
 export interface ScanPayload {
   target: string;
   preset: string;
-  scan_type?: "web" | "linux";
+  scan_type?: "web" | "linux" | "windows";
   ssh_port?: number;
   ssh_user?: string;
   ssh_password?: string;

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import datetime as dt
+import json
 import re
 import time
 import traceback
@@ -61,6 +62,94 @@ COMMANDS: list[tuple[str, str, int]] = [
         10,
     ),
     ("docker", "ls -l /var/run/docker.sock 2>/dev/null", 10),
+]
+
+WINDOWS_EOL: list[tuple[str, str]] = [
+    ("windows server 2008", "2020-01-14"),
+    ("windows server 2012", "2023-10-10"),
+    ("windows server 2016", "2027-01-12"),
+    ("windows server 2019", "2029-01-09"),
+    ("windows server 2022", "2031-10-14"),
+    ("windows 7", "2020-01-14"),
+    ("windows 8", "2023-01-10"),
+    ("windows 10", "2025-10-14"),
+]
+
+
+def _ps(script: str) -> str:
+    """包装为 Windows OpenSSH 默认 cmd shell 可调用的 PowerShell 只读命令。"""
+    return f'powershell -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "{script}"'
+
+
+WINDOWS_COMMANDS: list[tuple[str, str, int]] = [
+    (
+        "os",
+        _ps(
+            "$os=Get-CimInstance Win32_OperatingSystem; "
+            "[pscustomobject]@{Caption=$os.Caption;Version=$os.Version;Build=$os.BuildNumber;"
+            "OSArchitecture=$os.OSArchitecture;Hostname=$env:COMPUTERNAME} | ConvertTo-Json -Compress"
+        ),
+        20,
+    ),
+    (
+        "updates",
+        _ps(
+            "$ProgressPreference='SilentlyContinue'; try { "
+            "$s=New-Object -ComObject Microsoft.Update.Session; "
+            "$r=$s.CreateUpdateSearcher().Search('IsInstalled=0'); "
+            "$u=@($r.Updates | ForEach-Object { [pscustomobject]@{Title=$_.Title;Security=[bool]($_.Title -match 'Security')} }); "
+            "if ($u.Count -eq 0) { '[]' } else { $u | ConvertTo-Json -Compress } } catch { '[]' }"
+        ),
+        120,
+    ),
+    (
+        "hotfixes",
+        _ps(
+            "Get-HotFix -ErrorAction SilentlyContinue | Sort-Object InstalledOn -Descending | "
+            "Select-Object -First 60 HotFixID,Description,InstalledOn | ConvertTo-Json -Compress"
+        ),
+        30,
+    ),
+    (
+        "services",
+        _ps("Get-Service | Where-Object { $_.Status -eq 'Running' } | Select-Object -First 200 -ExpandProperty Name"),
+        25,
+    ),
+    (
+        "listeners",
+        _ps(
+            "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | "
+            "Select-Object -First 300 LocalAddress,LocalPort | ConvertTo-Json -Compress"
+        ),
+        25,
+    ),
+    (
+        "firewall",
+        _ps("Get-NetFirewallProfile -ErrorAction SilentlyContinue | Select-Object Name,Enabled | ConvertTo-Json -Compress"),
+        20,
+    ),
+    (
+        "defender",
+        _ps(
+            "Get-MpComputerStatus -ErrorAction SilentlyContinue | "
+            "Select-Object AntivirusEnabled,RealTimeProtectionEnabled,AntivirusSignatureLastUpdated | ConvertTo-Json -Compress"
+        ),
+        25,
+    ),
+    ("smb", _ps("Get-SmbServerConfiguration -ErrorAction SilentlyContinue | Select-Object EnableSMB1Protocol | ConvertTo-Json -Compress"), 20),
+    (
+        "autoupdate",
+        _ps(
+            "$p='HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU'; "
+            "if (Test-Path $p) { Get-ItemProperty $p | Select-Object NoAutoUpdate,AUOptions | ConvertTo-Json -Compress } else { '{}' }"
+        ),
+        15,
+    ),
+    (
+        "reboot",
+        _ps("Test-Path 'HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\WindowsUpdate\\Auto Update\\RebootRequired'"),
+        15,
+    ),
 ]
 
 
@@ -281,6 +370,190 @@ def _eol_status(os_id: str, version: str) -> tuple[str, int] | None:
     return None
 
 
+def _json_output(text: str) -> Any:
+    """从 PowerShell 输出中提取首个 JSON 值，容忍前后的警告文本。"""
+    text = (text or "").strip()
+    starts = [index for index in (text.find("{"), text.find("[")) if index >= 0]
+    if not starts:
+        return None
+    snippet = text[min(starts):]
+    try:
+        value, _ = json.JSONDecoder().raw_decode(snippet)
+        return value
+    except json.JSONDecodeError:
+        return None
+
+
+def _as_list(value: Any) -> list[Any]:
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _ps_date(value: Any) -> str:
+    if not value:
+        return ""
+    text = str(value)
+    match = re.search(r"Date\((\d+)", text)
+    if match:
+        try:
+            return dt.datetime.fromtimestamp(int(match.group(1)) / 1000).strftime("%Y-%m-%d")
+        except (ValueError, OSError, OverflowError):
+            return ""
+    return text[:32]
+
+
+def _ps_days_since(value: Any) -> int | None:
+    text = str(value or "")
+    match = re.search(r"Date\((\d+)", text)
+    timestamp: float | None = None
+    if match:
+        timestamp = int(match.group(1)) / 1000
+    else:
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%Y/%m/%d"):
+            try:
+                timestamp = dt.datetime.strptime(text.strip()[:10], fmt).timestamp()
+                break
+            except ValueError:
+                continue
+    if timestamp is None:
+        return None
+    return int((time.time() - timestamp) / 86400)
+
+
+def parse_windows_os(text: str) -> dict[str, Any]:
+    data = _json_output(text) or {}
+    if not isinstance(data, dict):
+        data = {}
+    caption = str(data.get("Caption") or "")
+    return {
+        "id": "windows",
+        "version_id": str(data.get("Version") or ""),
+        "name": caption,
+        "pretty": caption,
+        "kernel": str(data.get("Build") or ""),
+        "arch": str(data.get("OSArchitecture") or ""),
+        "hostname": str(data.get("Hostname") or ""),
+    }
+
+
+def parse_windows_updates(text: str) -> list[dict[str, Any]]:
+    updates: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for item in _as_list(_json_output(text)):
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("Title") or "").strip()
+        if not title or title in seen:
+            continue
+        seen.add(title)
+        updates.append(
+            {"name": title, "version": "", "old_version": "", "repo": "", "arch": "", "security": bool(item.get("Security"))}
+        )
+    return updates[:300]
+
+
+def parse_windows_hotfixes(text: str) -> list[dict[str, str]]:
+    hotfixes: list[dict[str, str]] = []
+    for item in _as_list(_json_output(text)):
+        if not isinstance(item, dict):
+            continue
+        hotfix_id = str(item.get("HotFixID") or "").strip()
+        if not hotfix_id:
+            continue
+        hotfixes.append(
+            {
+                "id": hotfix_id,
+                "description": str(item.get("Description") or ""),
+                "installed_on": _ps_date(item.get("InstalledOn")),
+            }
+        )
+    return hotfixes
+
+
+def parse_windows_services(text: str) -> list[str]:
+    services: list[str] = []
+    for line in (text or "").splitlines():
+        name = line.strip()
+        if name and re.match(r"^[A-Za-z0-9_.-]+$", name) and name not in services:
+            services.append(name)
+    return services[:200]
+
+
+def parse_windows_listeners(text: str) -> list[dict[str, Any]]:
+    listeners: list[dict[str, Any]] = []
+    seen: set[tuple[str, int]] = set()
+    for item in _as_list(_json_output(text)):
+        if not isinstance(item, dict):
+            continue
+        try:
+            port = int(item.get("LocalPort"))
+        except (TypeError, ValueError):
+            continue
+        address = str(item.get("LocalAddress") or "")
+        if ("tcp", port) in seen:
+            continue
+        seen.add(("tcp", port))
+        listeners.append(
+            {"proto": "tcp", "address": address, "port": port, "exposed": address in ("0.0.0.0", "::", "")}
+        )
+    return sorted(listeners, key=lambda item: (not item["exposed"], item["port"]))
+
+
+def parse_windows_firewall(text: str) -> dict[str, Any]:
+    profiles: list[dict[str, Any]] = []
+    for item in _as_list(_json_output(text)):
+        if not isinstance(item, dict):
+            continue
+        profiles.append({"name": str(item.get("Name") or ""), "enabled": bool(item.get("Enabled"))})
+    return {"active": any(p["enabled"] for p in profiles), "profiles": profiles}
+
+
+def parse_windows_defender(text: str) -> dict[str, Any]:
+    data = _json_output(text)
+    if not isinstance(data, dict):
+        return {"present": False}
+    return {
+        "present": True,
+        "antivirus": bool(data.get("AntivirusEnabled")),
+        "realtime": bool(data.get("RealTimeProtectionEnabled")),
+        "signature_age_days": _ps_days_since(data.get("AntivirusSignatureLastUpdated")),
+    }
+
+
+def parse_windows_autoupdate(text: str) -> bool:
+    data = _json_output(text)
+    if not isinstance(data, dict):
+        return True
+    try:
+        return int(data.get("NoAutoUpdate") or 0) != 1
+    except (TypeError, ValueError):
+        return True
+
+
+def build_windows_info(outputs: dict[str, str], os_info: dict[str, Any]) -> dict[str, Any]:
+    smb = _json_output(outputs.get("smb", ""))
+    return {
+        "host": os_info,
+        "packages": [],
+        "hotfixes": parse_windows_hotfixes(outputs.get("hotfixes", "")),
+        "updates": parse_windows_updates(outputs.get("updates", "")),
+        "services": parse_windows_services(outputs.get("services", "")),
+        "listeners": parse_windows_listeners(outputs.get("listeners", "")),
+        "ssh": {},
+        "firewall": parse_windows_firewall(outputs.get("firewall", "")),
+        "security_modules": {},
+        "defender": parse_windows_defender(outputs.get("defender", "")),
+        "smb1_enabled": bool(smb.get("EnableSMB1Protocol")) if isinstance(smb, dict) else False,
+        "uid0_accounts": [],
+        "reboot_required": "true" in outputs.get("reboot", "").lower(),
+        "autoupdate": parse_windows_autoupdate(outputs.get("autoupdate", "")),
+        "docker_socket": {"present": False},
+    }
+
+
 def _host_finding(
     config: ScanConfig,
     check_id: str,
@@ -311,7 +584,178 @@ def _host_finding(
     )
 
 
+def build_windows_findings(config: ScanConfig, info: dict[str, Any]) -> list[Finding]:
+    findings: list[Finding] = []
+    host = info["host"]
+    caption = str(host.get("pretty") or "")
+    for key, eol_text in WINDOWS_EOL:
+        if key not in caption.lower():
+            continue
+        days = (dt.date.fromisoformat(eol_text) - dt.date.today()).days
+        if days < 0:
+            findings.append(
+                _host_finding(
+                    config,
+                    "host.os_eol",
+                    "操作系统已停止维护",
+                    "high",
+                    f"{caption} 的官方支持已于 {eol_text} 结束，继续使用将无法获得安全补丁。",
+                    "制定升级计划，迁移到仍受支持的 Windows 版本；升级前评估应用兼容性并备份。",
+                    f"OS: {caption}\nEOL: {eol_text}",
+                    cwe="CWE-1104",
+                )
+            )
+        elif days <= 180:
+            findings.append(
+                _host_finding(
+                    config,
+                    "host.os_eol_soon",
+                    "操作系统即将停止维护",
+                    "medium",
+                    f"{caption} 将在 {eol_text} 结束支持（剩余 {days} 天）。",
+                    "在 EOL 前完成升级或迁移，或为关键系统准备扩展安全更新方案。",
+                    f"OS: {caption}\nEOL: {eol_text}",
+                    cwe="CWE-1104",
+                )
+            )
+        break
+
+    updates = info.get("updates", [])
+    security_updates = [item for item in updates if item.get("security")]
+    if security_updates:
+        severity = "high" if len(security_updates) >= 10 else "medium"
+        findings.append(
+            _host_finding(
+                config,
+                "host.security_updates",
+                "存在未安装的安全更新",
+                severity,
+                f"Windows Update 检测到 {len(security_updates)} 个安全更新待安装，系统可能暴露于已公开漏洞。",
+                "在维护窗口内通过 Windows Update 或 WSUS 安装安全更新，优先处理累积更新与远程服务相关补丁。",
+                "\n".join(item["name"] for item in security_updates[:10]),
+                cwe="CWE-1035",
+            )
+        )
+    elif updates:
+        findings.append(
+            _host_finding(
+                config,
+                "host.pending_updates",
+                "存在待安装的系统更新",
+                "low",
+                f"Windows Update 检测到 {len(updates)} 个待安装更新，其中未识别出安全更新标记。",
+                "评估并安装可用更新，保持系统处于受支持的补丁级别。",
+                "\n".join(item["name"] for item in updates[:10]),
+                cwe="CWE-1104",
+            )
+        )
+
+    if info.get("reboot_required"):
+        findings.append(
+            _host_finding(
+                config,
+                "host.reboot_required",
+                "系统需要重启以完成更新",
+                "medium",
+                "Windows Update 标记了挂起的重启，部分更新（含安全补丁）尚未生效。",
+                "安排维护窗口重启主机，重启前确认业务高可用与回滚方案。",
+                "WindowsUpdate\\Auto Update\\RebootRequired 存在",
+                cwe="CWE-1104",
+            )
+        )
+
+    firewall = info.get("firewall", {})
+    if firewall.get("profiles") and not firewall.get("active"):
+        profiles = "、".join(f"{p['name']}={'启用' if p['enabled'] else '禁用'}" for p in firewall.get("profiles", []))
+        findings.append(
+            _host_finding(
+                config,
+                "host.firewall_disabled",
+                "Windows 防火墙未启用",
+                "medium",
+                "所有防火墙配置文件均为禁用状态，暴露服务缺少网络层访问控制。",
+                "启用域/专用/公用防火墙配置文件，仅放行必要端口，并限制管理端口（3389/5985）来源 IP。",
+                profiles or "未检测到启用的防火墙配置文件",
+                cwe="CWE-284",
+            )
+        )
+
+    defender = info.get("defender", {})
+    if defender.get("present"):
+        if not defender.get("antivirus"):
+            findings.append(
+                _host_finding(
+                    config,
+                    "host.defender_disabled",
+                    "Windows Defender 防病毒已禁用",
+                    "high",
+                    "Defender 防病毒功能处于禁用状态，主机缺少基础恶意软件防护。",
+                    "启用 Defender 或部署等效的企业杀软，并确认未被组策略或第三方软件长期禁用。",
+                    f"AntivirusEnabled={defender.get('antivirus')}",
+                    cwe="CWE-693",
+                )
+            )
+        elif not defender.get("realtime"):
+            findings.append(
+                _host_finding(
+                    config,
+                    "host.defender_realtime_off",
+                    "Defender 实时保护已关闭",
+                    "medium",
+                    "实时保护关闭后，恶意文件在写入或执行时不会被拦截。",
+                    "开启实时保护，并排查是否被组策略、性能优化脚本或第三方软件关闭。",
+                    "RealTimeProtectionEnabled=False",
+                    cwe="CWE-693",
+                )
+            )
+        age = defender.get("signature_age_days")
+        if isinstance(age, int) and age > 7:
+            findings.append(
+                _host_finding(
+                    config,
+                    "host.defender_signature_stale",
+                    "Defender 病毒库更新滞后",
+                    "low",
+                    f"病毒特征库已 {age} 天未更新，对新威胁的识别能力下降。",
+                    "检查 Windows Update / WSUS 通道与网络代理，恢复特征库自动更新。",
+                    f"AntivirusSignatureLastUpdated 距今 {age} 天",
+                    cwe="CWE-1104",
+                )
+            )
+
+    if info.get("smb1_enabled"):
+        findings.append(
+            _host_finding(
+                config,
+                "host.smb1_enabled",
+                "SMBv1 协议已启用",
+                "high",
+                "SMBv1 存在多个严重历史漏洞（如 EternalBlue/WannaCry 利用链），且缺乏现代安全特性。",
+                "在确认无老旧设备依赖后，通过 Disable-WindowsOptionalFeature 或组策略禁用 SMBv1，并先开启审计观察影响。",
+                "EnableSMB1Protocol=True",
+                cwe="CWE-327",
+            )
+        )
+
+    if not info.get("autoupdate"):
+        findings.append(
+            _host_finding(
+                config,
+                "host.autoupdate_missing",
+                "Windows 自动更新已被禁用",
+                "medium",
+                "组策略中 NoAutoUpdate=1，系统不会自动获取补丁，补丁容易长期滞后。",
+                "恢复自动更新或通过 WSUS/补丁管理平台建立定期补丁流程，并保留重启与回滚策略。",
+                "NoAutoUpdate=1",
+                cwe="CWE-1104",
+            )
+        )
+    return findings
+
+
 def build_findings(config: ScanConfig, info: dict[str, Any]) -> list[Finding]:
+    if config.scan_type == "windows":
+        return build_windows_findings(config, info)
     findings: list[Finding] = []
     host = info["host"]
     os_id = host.get("id", "")
@@ -552,10 +996,12 @@ class HostScanEngine:
             summary["package_count"] = len(info["packages"])
             summary["service_count"] = len(info["services"])
             summary["update_count"] = len(info["updates"])
+            summary["hotfix_count"] = len(info.get("hotfixes", []))
 
             assets = {
                 "host": info["host"],
                 "package_count": len(info["packages"]),
+                "hotfix_count": len(info.get("hotfixes", [])),
                 "update_count": len(info["updates"]),
                 "security_update_count": len([item for item in info["updates"] if item.get("security")]),
                 "service_count": len(info["services"]),
@@ -564,12 +1010,15 @@ class HostScanEngine:
             discovery = {
                 "host": info["host"],
                 "packages": info["packages"],
+                "hotfixes": info.get("hotfixes", []),
                 "updates": info["updates"],
                 "services": info["services"],
                 "listeners": info["listeners"],
                 "ssh": info["ssh"],
                 "firewall": info["firewall"],
                 "security_modules": info["security_modules"],
+                "defender": info.get("defender", {}),
+                "smb1_enabled": info.get("smb1_enabled", False),
                 "uid0_accounts": info["uid0_accounts"],
                 "reboot_required": info["reboot_required"],
                 "autoupdate": info["autoupdate"],
@@ -617,10 +1066,11 @@ class HostScanEngine:
             key = transport.get_remote_server_key() if transport else None
             fingerprint = key.get_fingerprint().hex(":") if key else ""
             outputs: dict[str, str] = {}
-            for name, command, timeout in COMMANDS:
+            is_windows = self.config.scan_type == "windows"
+            for name, command, timeout in (WINDOWS_COMMANDS if is_windows else COMMANDS):
                 outputs[name] = self._exec(client, command, timeout)
 
-            os_info = parse_os(outputs.get("os", ""))
+            os_info = parse_windows_os(outputs.get("os", "")) if is_windows else parse_os(outputs.get("os", ""))
             os_info.update(
                 {
                     "user": self.config.ssh_user,
@@ -629,6 +1079,8 @@ class HostScanEngine:
                     "fingerprint": fingerprint,
                 }
             )
+            if is_windows:
+                return build_windows_info(outputs, os_info)
             packages = parse_packages(outputs.get("packages", ""))
             updates = parse_updates(outputs.get("updates", ""), os_info.get("id", ""))
             firewall = inspect_firewall(outputs.get("firewall", ""))

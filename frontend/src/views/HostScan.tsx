@@ -2,15 +2,35 @@ import { useState } from "react";
 import type { ScanPayload } from "../types";
 import { AlertIcon, CheckIcon, PlayIcon, ServerIcon } from "../components/Icons";
 
+type HostType = "linux" | "windows";
+
 interface Props {
   initialTarget?: string;
+  initialScanType?: HostType;
   onStart: (payload: ScanPayload) => Promise<void>;
 }
 
-export default function HostScan({ initialTarget = "", onStart }: Props) {
-  const [host, setHost] = useState(initialTarget);
-  const [port, setPort] = useState("22");
-  const [user, setUser] = useState("root");
+function parseSshTarget(target: string) {
+  const value = target.trim();
+  if (!value.startsWith("ssh://")) return { host: value, port: "22", user: "" };
+  try {
+    const parsed = new URL(value);
+    return {
+      host: parsed.hostname.replace(/^\[|\]$/g, ""),
+      port: parsed.port || "22",
+      user: decodeURIComponent(parsed.username),
+    };
+  } catch {
+    return { host: value, port: "22", user: "" };
+  }
+}
+
+export default function HostScan({ initialTarget = "", initialScanType = "linux", onStart }: Props) {
+  const initial = parseSshTarget(initialTarget);
+  const [scanType, setScanType] = useState<HostType>(initialScanType);
+  const [host, setHost] = useState(initial.host);
+  const [port, setPort] = useState(initial.port);
+  const [user, setUser] = useState(initial.user || (initialScanType === "windows" ? "Administrator" : "root"));
   const [authMode, setAuthMode] = useState<"password" | "key">("password");
   const [password, setPassword] = useState("");
   const [keyPath, setKeyPath] = useState("");
@@ -19,9 +39,18 @@ export default function HostScan({ initialTarget = "", onStart }: Props) {
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  const chooseScanType = (next: HostType) => {
+    setScanType(next);
+    setUser((current) => {
+      if (next === "windows" && (!current || current === "root")) return "Administrator";
+      if (next === "linux" && (!current || current === "Administrator")) return "root";
+      return current;
+    });
+  };
+
   const submit = async () => {
     setError("");
-    const cleanHost = host.trim().replace(/^ssh:\/\/.*@/, "");
+    const cleanHost = parseSshTarget(host).host.trim();
     if (!cleanHost) {
       setError("请输入主机 IP 或域名");
       return;
@@ -47,7 +76,7 @@ export default function HostScan({ initialTarget = "", onStart }: Props) {
       await onStart({
         target: cleanHost,
         preset: "standard",
-        scan_type: "linux",
+        scan_type: scanType,
         authorization_confirmed: true,
         ssh_port: Number(port) || 22,
         ssh_user: user.trim(),
@@ -68,7 +97,7 @@ export default function HostScan({ initialTarget = "", onStart }: Props) {
         <div className="hero-copy">
           <div className="eyebrow">
             <span className="pulse-dot" />
-            LINUX HOST CHECKUP
+            {scanType === "windows" ? "WINDOWS" : "LINUX"} HOST CHECKUP
           </div>
           <h1>
             给服务器做一次
@@ -76,8 +105,9 @@ export default function HostScan({ initialTarget = "", onStart }: Props) {
             <span className="gradient-text">补丁与配置体检</span>
           </h1>
           <p>
-            通过 SSH 只读采集系统信息、待安装更新与服务配置，检查补丁滞后、
-            SSH 加固、防火墙与权限隔离等主机层风险，全程不修改目标系统。
+            {scanType === "windows"
+              ? "通过 Windows OpenSSH 调用 PowerShell 只读采集系统、补丁、防火墙、Defender 与 SMBv1 状态，全程不修改目标系统。"
+              : "通过 SSH 只读采集系统信息、待安装更新与服务配置，检查补丁滞后、SSH 加固、防火墙与权限隔离等主机层风险。"}
           </p>
         </div>
         <div className="hero-visual" aria-hidden="true">
@@ -94,7 +124,7 @@ export default function HostScan({ initialTarget = "", onStart }: Props) {
             </div>
           </div>
           <div className="hero-chip chip-a">补丁检查</div>
-          <div className="hero-chip chip-b">SSH 加固</div>
+          <div className="hero-chip chip-b">{scanType === "windows" ? "Defender / SMBv1" : "SSH 加固"}</div>
           <div className="hero-chip chip-c">只读采集</div>
         </div>
       </section>
@@ -122,6 +152,15 @@ export default function HostScan({ initialTarget = "", onStart }: Props) {
         </div>
         <div className="url-hint">只执行读取类命令，不使用 sudo，不安装软件，不修改任何配置。</div>
 
+        <div className="chips" aria-label="主机系统类型">
+          <button className={`chip ${scanType === "linux" ? "active" : ""}`} onClick={() => chooseScanType("linux")} type="button">
+            Linux
+          </button>
+          <button className={`chip ${scanType === "windows" ? "active" : ""}`} onClick={() => chooseScanType("windows")} type="button">
+            Windows
+          </button>
+        </div>
+
         <div className="field-grid">
           <label className="field">
             <span className="label">SSH 端口</span>
@@ -136,12 +175,14 @@ export default function HostScan({ initialTarget = "", onStart }: Props) {
             <span className="label">SSH 用户名</span>
             <input
               className="input mono"
-              placeholder="root"
+              placeholder={scanType === "windows" ? "Administrator" : "root"}
               value={user}
               onChange={(event) => setUser(event.target.value)}
               spellCheck={false}
             />
-            <span className="hint">建议使用具有只读权限的普通账号</span>
+            <span className="hint">
+              {scanType === "windows" ? "建议使用可读取系统、更新与安全状态的巡检账号" : "建议使用具有只读权限的普通账号"}
+            </span>
           </label>
         </div>
 
@@ -220,8 +261,9 @@ export default function HostScan({ initialTarget = "", onStart }: Props) {
         ) : null}
 
         <div className="url-hint">
-          巡检会采集：操作系统与内核、待安装更新、运行服务与监听端口、SSH 配置、防火墙、
-          SELinux/AppArmor、UID 0 账号、自动更新与重启标记。
+          {scanType === "windows"
+            ? "巡检会采集：操作系统与版本、Windows Update、已安装补丁、运行服务与监听端口、防火墙、Defender、SMBv1、自动更新与重启标记。目标需启用 Windows OpenSSH Server 和 PowerShell。"
+            : "巡检会采集：操作系统与内核、待安装更新、运行服务与监听端口、SSH 配置、防火墙、SELinux/AppArmor、UID 0 账号、自动更新与重启标记。"}
         </div>
       </section>
     </div>

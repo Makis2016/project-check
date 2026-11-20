@@ -48,17 +48,20 @@ def build_markdown(scan: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append(f"# VulnLens 安全体检报告 · {scan['target']}")
     lines.append("")
-    is_host = (config.get("scan_type") or "web") == "linux"
+    scan_type = config.get("scan_type") or "web"
+    is_host = scan_type in ("linux", "windows")
+    is_windows = scan_type == "windows"
+    host_label = "Windows" if is_windows else "Linux"
     host_info = discovery.get("host") or {}
     lines.append(f"- **目标**：{scan['target']}")
     lines.append(f"- **扫描时间**：{_fmt_time(scan.get('created_at'))}")
     lines.append(f"- **耗时**：{(summary.get('duration_ms') or 0) / 1000:.1f} 秒")
     lines.append(f"- **风险等级**：{_risk_level(summary)}")
     if is_host:
-        lines.append("- **扫描类型**：Linux 主机只读巡检（不修改目标系统）")
+        lines.append(f"- **扫描类型**：{host_label} 主机只读巡检（不修改目标系统）")
         lines.append(
             f"- **操作系统**：{host_info.get('pretty') or host_info.get('id') or '未知'}"
-            f"　**内核**：{host_info.get('kernel') or '-'}"
+            f"　**{'系统版本' if is_windows else '内核'}**：{host_info.get('kernel') or '-'}"
         )
     else:
         lines.append(f"- **扫描预设**：{scan.get('preset', '-')}")
@@ -87,13 +90,38 @@ def build_markdown(scan: dict[str, Any]) -> str:
         modules = discovery.get("security_modules") or {}
         lines.append(f"- **主机名**：{host_info.get('hostname') or '-'}")
         lines.append(f"- **操作系统**：{host_info.get('pretty') or '-'}")
-        lines.append(f"- **内核 / 架构**：{host_info.get('kernel') or '-'} / {host_info.get('arch') or '-'}")
+        lines.append(
+            f"- **{'系统版本' if is_windows else '内核'} / 架构**：{host_info.get('kernel') or '-'} / {host_info.get('arch') or '-'}"
+        )
         lines.append(f"- **SSH 指纹**：`{host_info.get('fingerprint') or '-'}`")
-        lines.append(f"- **软件包**：{len(discovery.get('packages') or [])} 个　**待更新**：{len(discovery.get('updates') or [])} 个")
+        if is_windows:
+            hotfixes = discovery.get("hotfixes") or []
+            lines.append(
+                f"- **已安装补丁**：采集 {len(hotfixes)} 个　**待更新**：{len(discovery.get('updates') or [])} 个"
+            )
+            if hotfixes:
+                lines.append("- **最近补丁**：" + "、".join(item.get("id", "") for item in hotfixes[:12]))
+        else:
+            lines.append(f"- **软件包**：{len(discovery.get('packages') or [])} 个　**待更新**：{len(discovery.get('updates') or [])} 个")
         lines.append(f"- **运行服务**：{len(discovery.get('services') or [])} 个　**监听端口**：{len(discovery.get('listeners') or [])} 个")
         lines.append(f"- **防火墙**：{'已启用' if firewall.get('active') else '未检测到'}")
-        lines.append(f"- **SELinux / AppArmor**：{modules.get('selinux', '-')} / {modules.get('apparmor', '-')}")
-        lines.append(f"- **SSH 认证**：密码认证 {ssh.get('passwordauthentication', '-')}，root 登录 {ssh.get('permitrootlogin', '-')}")
+        if is_windows:
+            defender = discovery.get("defender") or {}
+            if defender.get("present"):
+                defender_text = (
+                    f"防病毒 {'已启用' if defender.get('antivirus') else '已禁用'}，"
+                    f"实时保护 {'已启用' if defender.get('realtime') else '已关闭'}"
+                )
+                if isinstance(defender.get("signature_age_days"), int):
+                    defender_text += f"，病毒库距今 {defender['signature_age_days']} 天"
+            else:
+                defender_text = "未采集到状态"
+            lines.append(f"- **Defender**：{defender_text}")
+            lines.append(f"- **SMBv1**：{'已启用' if discovery.get('smb1_enabled') else '未检测到启用'}")
+            lines.append(f"- **自动更新**：{'已启用' if discovery.get('autoupdate') else '已禁用'}")
+        else:
+            lines.append(f"- **SELinux / AppArmor**：{modules.get('selinux', '-')} / {modules.get('apparmor', '-')}")
+            lines.append(f"- **SSH 认证**：密码认证 {ssh.get('passwordauthentication', '-')}，root 登录 {ssh.get('permitrootlogin', '-')}")
         listeners = discovery.get("listeners") or []
         if listeners:
             exposed = [item for item in listeners if item.get("exposed")]
@@ -104,7 +132,7 @@ def build_markdown(scan: dict[str, Any]) -> str:
         updates = discovery.get("updates") or []
         if updates:
             lines.append(
-                "- **待更新软件包**："
+                f"- **{'待安装 Windows 更新' if is_windows else '待更新软件包'}**："
                 + "、".join(
                     f"{item['name']}" + ("（安全）" if item.get("security") else "") for item in updates[:20]
                 )
@@ -291,7 +319,10 @@ def build_html(scan: dict[str, Any]) -> str:
     findings = scan.get("findings") or []
     risk = _risk_level(summary)
     tone = _risk_tone(summary)
-    is_host = (config.get("scan_type") or "web") == "linux"
+    scan_type = config.get("scan_type") or "web"
+    is_host = scan_type in ("linux", "windows")
+    is_windows = scan_type == "windows"
+    host_label = "Windows" if is_windows else "Linux"
     host_info = discovery.get("host") or {}
 
     cards = "".join(
@@ -305,18 +336,50 @@ def build_html(scan: dict[str, Any]) -> str:
         firewall = discovery.get("firewall") or {}
         modules = discovery.get("security_modules") or {}
         exposed = [item for item in (discovery.get("listeners") or []) if item.get("exposed")]
+        hotfixes = discovery.get("hotfixes") or []
+        package_count = len(hotfixes) if is_windows else len(discovery.get("packages") or [])
         assets_rows = [
             ("主机名", host_info.get("hostname") or "—"),
             ("操作系统", host_info.get("pretty") or "—"),
-            ("内核 / 架构", f"{host_info.get('kernel') or '—'} / {host_info.get('arch') or '—'}"),
+            (
+                "系统版本 / 架构" if is_windows else "内核 / 架构",
+                f"{host_info.get('kernel') or '—'} / {host_info.get('arch') or '—'}",
+            ),
             ("SSH 指纹", host_info.get("fingerprint") or "—"),
-            ("软件包", f"{len(discovery.get('packages') or [])} 个，待更新 {len(discovery.get('updates') or [])} 个"),
+            (
+                "已安装补丁" if is_windows else "软件包",
+                f"{'采集 ' if is_windows else ''}{package_count} 个，待更新 {len(discovery.get('updates') or [])} 个",
+            ),
             ("运行服务", f"{len(discovery.get('services') or [])} 个，监听端口 {len(discovery.get('listeners') or [])} 个"),
             ("对外监听", "、".join(f"{item['port']}/{item['proto']}" for item in exposed[:30]) or "未发现"),
             ("防火墙", "已启用" if firewall.get("active") else "未检测到"),
-            ("SELinux / AppArmor", f"{modules.get('selinux', '—')} / {modules.get('apparmor', '—')}"),
-            ("SSH 认证", f"密码认证 {ssh.get('passwordauthentication', '—')}，root 登录 {ssh.get('permitrootlogin', '—')}"),
         ]
+        if is_windows:
+            defender = discovery.get("defender") or {}
+            if defender.get("present"):
+                defender_text = (
+                    f"防病毒 {'已启用' if defender.get('antivirus') else '已禁用'}，"
+                    f"实时保护 {'已启用' if defender.get('realtime') else '已关闭'}"
+                )
+                if isinstance(defender.get("signature_age_days"), int):
+                    defender_text += f"，病毒库距今 {defender['signature_age_days']} 天"
+            else:
+                defender_text = "未采集到状态"
+            assets_rows.extend(
+                [
+                    ("最近补丁", "、".join(item.get("id", "") for item in hotfixes[:12]) or "未采集到"),
+                    ("Defender", defender_text),
+                    ("SMBv1", "已启用" if discovery.get("smb1_enabled") else "未检测到启用"),
+                    ("自动更新", "已启用" if discovery.get("autoupdate") else "已禁用"),
+                ]
+            )
+        else:
+            assets_rows.extend(
+                [
+                    ("SELinux / AppArmor", f"{modules.get('selinux', '—')} / {modules.get('apparmor', '—')}"),
+                    ("SSH 认证", f"密码认证 {ssh.get('passwordauthentication', '—')}，root 登录 {ssh.get('permitrootlogin', '—')}"),
+                ]
+            )
     else:
         assets_rows = [
             ("解析地址", "、".join(assets.get("resolved_ips") or []) or "未获取"),
@@ -437,13 +500,13 @@ def build_html(scan: dict[str, Any]) -> str:
 <body>
 <main class="page">
   <header class="cover">
-    <div class="brand">VulnLens · {"Linux Host Security Report" if is_host else "Web Security Report"}</div>
+    <div class="brand">VulnLens · {host_label + " Host Security Report" if is_host else "Web Security Report"}</div>
     <h1>{html.escape(str(scan.get("target") or ""))}</h1>
     <div class="cover-meta">
       <span class="risk {tone}">风险等级：{html.escape(risk)}</span>
       <span>扫描时间：{html.escape(_fmt_time(scan.get("created_at")))}</span>
       <span>耗时：{(summary.get("duration_ms") or 0) / 1000:.1f}s</span>
-      <span>{"巡检：Linux 主机" if is_host else "预设：" + html.escape(str(scan.get("preset") or "-"))}</span>
+      <span>{"巡检：" + host_label + " 主机" if is_host else "预设：" + html.escape(str(scan.get("preset") or "-"))}</span>
       {"" if is_host else f'<span>请求：{summary.get("request_count", 0)}</span><span>页面：{summary.get("page_count", 0)}</span><span>接口：{summary.get("endpoint_count", 0)}</span>'}
     </div>
   </header>
@@ -496,14 +559,19 @@ def build_json(scan: dict[str, Any]) -> str:
                     {
                         "host": discovery.get("host") or {},
                         "packages": discovery.get("packages") or [],
+                        "hotfixes": discovery.get("hotfixes") or [],
                         "updates": discovery.get("updates") or [],
                         "services": discovery.get("services") or [],
                         "listeners": discovery.get("listeners") or [],
                         "ssh": discovery.get("ssh") or {},
                         "firewall": discovery.get("firewall") or {},
                         "security_modules": discovery.get("security_modules") or {},
+                        "defender": discovery.get("defender") or {},
+                        "smb1_enabled": discovery.get("smb1_enabled") or False,
+                        "reboot_required": discovery.get("reboot_required") or False,
+                        "autoupdate": discovery.get("autoupdate") or False,
                     }
-                    if (scan.get("config") or {}).get("scan_type") == "linux"
+                    if (scan.get("config") or {}).get("scan_type") in ("linux", "windows")
                     else {}
                 ),
             },

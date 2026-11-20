@@ -123,10 +123,13 @@ def build_config(payload: dict[str, Any]) -> ScanConfig:
     if preset not in PRESET_DEFAULTS:
         preset = "standard"
     defaults = PRESET_DEFAULTS[preset]
+    scan_type = str(payload.get("scan_type") or "web")
+    if scan_type not in ("web", "linux", "windows"):
+        scan_type = "web"
     cfg = ScanConfig(
         target=str(payload.get("target") or "").strip(),
         preset=preset,
-        scan_type="linux" if payload.get("scan_type") == "linux" else "web",
+        scan_type=scan_type,
         authorization_confirmed=bool(payload.get("authorization_confirmed")),
         cookie=str(payload.get("cookie") or "").strip(),
         headers={str(k): str(v) for k, v in (payload.get("headers") or {}).items() if k},

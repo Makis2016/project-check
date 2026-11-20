@@ -22,6 +22,7 @@ export default function App() {
   const [active, setActive] = useState<ActiveScan | null>(null);
   const [scan, setScan] = useState<Scan | null>(null);
   const [initialTarget, setInitialTarget] = useState("");
+  const [initialHostType, setInitialHostType] = useState<"linux" | "windows">("linux");
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -69,12 +70,15 @@ export default function App() {
 
   const goHost = () => {
     setInitialTarget("");
+    setInitialHostType("linux");
     setView("host");
   };
 
   const rescan = (target: string, scanType?: string) => {
     setInitialTarget(target);
-    setView(scanType === "linux" ? "host" : "new");
+    const isHost = scanType === "linux" || scanType === "windows";
+    setInitialHostType(scanType === "windows" ? "windows" : "linux");
+    setView(isHost ? "host" : "new");
   };
 
   return (
@@ -125,7 +129,7 @@ export default function App() {
       <main className="main">
         {view === "new" ? <NewScan initialTarget={initialTarget} onStart={startScan} /> : null}
 
-        {view === "host" ? <HostScan initialTarget={initialTarget} onStart={startScan} /> : null}
+        {view === "host" ? <HostScan initialTarget={initialTarget} initialScanType={initialHostType} onStart={startScan} /> : null}
 
         {view === "live" && active ? (
           <LiveScan

@@ -69,7 +69,9 @@ function DiffList({
 }
 
 export default function ReportView({ scan, onBack, onRescan }: Props) {
-  const isHost = scan.config?.scan_type === "linux";
+  const scanType = scan.config?.scan_type;
+  const isWindows = scanType === "windows";
+  const isHost = scanType === "linux" || isWindows;
   const [tab, setTab] = useState<Tab>(isHost ? "host" : "findings");
   const [severity, setSeverity] = useState<"all" | Severity>("all");
   const [query, setQuery] = useState("");
@@ -144,12 +146,18 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
   const assets = scan.assets;
   const risk = riskLevel(summary);
   const host = scan.discovery?.host;
+  const hostHotfixes = scan.discovery?.hotfixes ?? [];
   const hostUpdates = scan.discovery?.updates ?? [];
   const hostServices = scan.discovery?.services ?? [];
   const hostListeners = scan.discovery?.listeners ?? [];
   const sshConfig = scan.discovery?.ssh ?? {};
   const hostFirewall = scan.discovery?.firewall;
   const hostModules = scan.discovery?.security_modules;
+  const defender = scan.discovery?.defender;
+  const rescanHost = scan.config?.target || scan.target;
+  const rescanTarget = isHost
+    ? `ssh://${scan.config?.ssh_user || host?.user || ""}@${rescanHost.includes(":") ? `[${rescanHost}]` : rescanHost}:${scan.config?.ssh_port || host?.port || 22}`
+    : scan.target;
 
   const counts = useMemo(() => {
     const base: Record<string, number> = { all: findings.length };
@@ -195,9 +203,13 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
             <span>{formatDuration(summary?.duration_ms)}</span>
             {isHost ? (
               <>
-                <span>Linux 主机只读巡检</span>
+                <span>{isWindows ? "Windows" : "Linux"} 主机只读巡检</span>
                 <span>{scan.discovery?.host?.pretty || scan.discovery?.host?.id || "未知系统"}</span>
-                <span>{summary?.package_count ?? 0} 软件包</span>
+                <span>
+                  {isWindows
+                    ? `${summary?.hotfix_count ?? hostHotfixes.length} 已装补丁`
+                    : `${summary?.package_count ?? 0} 软件包`}
+                </span>
                 <span>{summary?.update_count ?? 0} 待更新</span>
               </>
             ) : (
@@ -228,7 +240,7 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
               </div>
             ) : null}
           </div>
-          <button className="btn btn-primary" onClick={() => onRescan(scan.target, scan.config?.scan_type)}>
+          <button className="btn btn-primary" onClick={() => onRescan(rescanTarget, scanType)}>
             <RefreshIcon width={16} height={16} /> {isHost ? "重新巡检" : "重新扫描"}
           </button>
         </div>
@@ -250,7 +262,10 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
       <div className="metric-row">
         {isHost ? (
           <>
-            <div className="metric"><span>软件包</span><b>{summary?.package_count ?? 0}</b></div>
+            <div className="metric">
+              <span>{isWindows ? "已装补丁" : "软件包"}</span>
+              <b>{isWindows ? summary?.hotfix_count ?? hostHotfixes.length : summary?.package_count ?? 0}</b>
+            </div>
             <div className="metric"><span>待更新</span><b>{summary?.update_count ?? 0}</b></div>
             <div className="metric"><span>运行服务</span><b>{summary?.service_count ?? hostServices.length}</b></div>
             <div className="metric"><span>监听端口</span><b>{hostListeners.length}</b></div>
@@ -345,7 +360,7 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
                 <dl className="kv">
                   <dt>主机名</dt><dd className="mono">{host?.hostname || "—"}</dd>
                   <dt>操作系统</dt><dd>{host?.pretty || host?.id || "—"}</dd>
-                  <dt>内核 / 架构</dt><dd className="mono">{host?.kernel || "—"} / {host?.arch || "—"}</dd>
+                  <dt>{isWindows ? "系统版本 / 架构" : "内核 / 架构"}</dt><dd className="mono">{host?.kernel || "—"} / {host?.arch || "—"}</dd>
                   <dt>SSH 账号</dt><dd className="mono">{host?.user || "—"}@{host?.target || "—"}:{host?.port ?? 22}</dd>
                   <dt>主机指纹</dt><dd className="mono break-all">{host?.fingerprint || "—"}</dd>
                 </dl>
@@ -357,11 +372,23 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
               <div className="asset-body">
                 <dl className="kv">
                   <dt>防火墙</dt><dd>{hostFirewall?.active ? "已启用" : "未检测到"}</dd>
-                  <dt>SELinux</dt><dd>{hostModules?.selinux || "—"}</dd>
-                  <dt>AppArmor</dt><dd>{hostModules?.apparmor || "—"}</dd>
-                  <dt>密码登录</dt><dd>{sshConfig.passwordauthentication || "—"}</dd>
-                  <dt>root 登录</dt><dd>{sshConfig.permitrootlogin || "—"}</dd>
-                  <dt>自动安全更新</dt><dd>{scan.discovery?.autoupdate ? "已启用" : "未启用"}</dd>
+                  {isWindows ? (
+                    <>
+                      <dt>Defender 防病毒</dt><dd>{defender?.present ? (defender.antivirus ? "已启用" : "已禁用") : "未采集到"}</dd>
+                      <dt>实时保护</dt><dd>{defender?.present ? (defender.realtime ? "已启用" : "已关闭") : "未采集到"}</dd>
+                      <dt>病毒库更新</dt><dd>{typeof defender?.signature_age_days === "number" ? `${defender.signature_age_days} 天前` : "—"}</dd>
+                      <dt>SMBv1</dt><dd>{scan.discovery?.smb1_enabled ? "已启用" : "未检测到启用"}</dd>
+                      <dt>自动更新</dt><dd>{scan.discovery?.autoupdate ? "已启用" : "已禁用"}</dd>
+                    </>
+                  ) : (
+                    <>
+                      <dt>SELinux</dt><dd>{hostModules?.selinux || "—"}</dd>
+                      <dt>AppArmor</dt><dd>{hostModules?.apparmor || "—"}</dd>
+                      <dt>密码登录</dt><dd>{sshConfig.passwordauthentication || "—"}</dd>
+                      <dt>root 登录</dt><dd>{sshConfig.permitrootlogin || "—"}</dd>
+                      <dt>自动安全更新</dt><dd>{scan.discovery?.autoupdate ? "已启用" : "未启用"}</dd>
+                    </>
+                  )}
                   <dt>需要重启</dt><dd>{scan.discovery?.reboot_required ? "是" : "否"}</dd>
                 </dl>
                 {scan.discovery?.uid0_accounts?.length ? (
@@ -401,15 +428,14 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
 
           <div className="panel table-panel">
             <header className="panel-head">
-              <span>待更新软件包</span>
+              <span>{isWindows ? "待安装 Windows 更新" : "待更新软件包"}</span>
               <span className="panel-count mono">{hostUpdates.length}</span>
             </header>
             <table className="data-table">
               <thead>
                 <tr>
-                  <th>软件包</th>
-                  <th>新版本</th>
-                  <th>当前版本</th>
+                  <th>{isWindows ? "更新名称" : "软件包"}</th>
+                  {!isWindows ? <><th>新版本</th><th>当前版本</th></> : null}
                   <th>类型</th>
                 </tr>
               </thead>
@@ -417,16 +443,37 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
                 {hostUpdates.slice(0, 300).map((item, index) => (
                   <tr key={`${item.name}-${item.version}-${index}`}>
                     <td className="mono">{item.name}</td>
-                    <td className="mono cell-url">{item.version}</td>
-                    <td className="mono">{item.old_version || "—"}</td>
+                    {!isWindows ? <><td className="mono cell-url">{item.version}</td><td className="mono">{item.old_version || "—"}</td></> : null}
                     <td>{item.security ? <span className="tag tag-risk">安全更新</span> : <span className="muted">普通更新</span>}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
-            {!hostUpdates.length ? <div className="empty-row">没有待安装的更新</div> : null}
+            {!hostUpdates.length ? <div className="empty-row">没有待安装的更新，或更新服务不可用</div> : null}
             {hostUpdates.length > 300 ? <div className="table-foot">仅展示前 300 条</div> : null}
           </div>
+
+          {isWindows ? (
+            <div className="panel table-panel">
+              <header className="panel-head">
+                <span>已安装补丁（最近 60 条）</span>
+                <span className="panel-count mono">{hostHotfixes.length}</span>
+              </header>
+              <table className="data-table">
+                <thead><tr><th>补丁编号</th><th>说明</th><th>安装日期</th></tr></thead>
+                <tbody>
+                  {hostHotfixes.map((item, index) => (
+                    <tr key={`${item.id}-${index}`}>
+                      <td className="mono">{item.id}</td>
+                      <td>{item.description || "—"}</td>
+                      <td className="mono">{item.installed_on || "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {!hostHotfixes.length ? <div className="empty-row">未采集到已安装补丁</div> : null}
+            </div>
+          ) : null}
         </>
       ) : null}
 
