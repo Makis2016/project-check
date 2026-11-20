@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from .models import SEVERITIES, SEVERITY_LABEL
 
-REPORT_VERSION = "1.2.0"
+REPORT_VERSION = "1.3.0"
 
 DISCLAIMER = (
     "本报告由 VulnLens 在本机对授权目标执行自动化检查生成。自动化结果可能存在误报或漏报，"
@@ -48,16 +48,25 @@ def build_markdown(scan: dict[str, Any]) -> str:
     lines: list[str] = []
     lines.append(f"# VulnLens 安全体检报告 · {scan['target']}")
     lines.append("")
+    is_host = (config.get("scan_type") or "web") == "linux"
+    host_info = discovery.get("host") or {}
     lines.append(f"- **目标**：{scan['target']}")
     lines.append(f"- **扫描时间**：{_fmt_time(scan.get('created_at'))}")
     lines.append(f"- **耗时**：{(summary.get('duration_ms') or 0) / 1000:.1f} 秒")
-    lines.append(f"- **扫描预设**：{scan.get('preset', '-')}")
     lines.append(f"- **风险等级**：{_risk_level(summary)}")
-    lines.append(f"- **请求数**：{summary.get('request_count', 0)}　**页面**：{summary.get('page_count', 0)}　**接口**：{summary.get('endpoint_count', 0)}")
-    if config.get("active_checks"):
-        lines.append("- **主动验证**：已开启（反射 XSS / 报错 SQLi / 开放重定向）")
+    if is_host:
+        lines.append("- **扫描类型**：Linux 主机只读巡检（不修改目标系统）")
+        lines.append(
+            f"- **操作系统**：{host_info.get('pretty') or host_info.get('id') or '未知'}"
+            f"　**内核**：{host_info.get('kernel') or '-'}"
+        )
     else:
-        lines.append("- **主动验证**：未开启")
+        lines.append(f"- **扫描预设**：{scan.get('preset', '-')}")
+        lines.append(f"- **请求数**：{summary.get('request_count', 0)}　**页面**：{summary.get('page_count', 0)}　**接口**：{summary.get('endpoint_count', 0)}")
+        if config.get("active_checks"):
+            lines.append("- **主动验证**：已开启（反射 XSS / 报错 SQLi / 开放重定向）")
+        else:
+            lines.append("- **主动验证**：未开启")
     lines.append("")
 
     lines.append("## 风险概览")
@@ -70,27 +79,56 @@ def build_markdown(scan: dict[str, Any]) -> str:
     )
     lines.append("")
 
-    lines.append("## 资产与暴露面")
+    lines.append("## 主机与系统信息" if is_host else "## 资产与暴露面")
     lines.append("")
-    ips = assets.get("resolved_ips") or []
-    lines.append(f"- **解析地址**：{', '.join(ips) if ips else '未获取'}")
-    ports = assets.get("open_ports") or []
-    if ports:
-        lines.append("- **开放端口**：" + "、".join(f"{p['port']}({p.get('service', '')})" for p in ports[:30]))
-    else:
-        lines.append("- **开放端口**：未探测或未发现")
-    tls = assets.get("tls") or {}
-    if tls:
-        if tls.get("supported"):
+    if is_host:
+        ssh = discovery.get("ssh") or {}
+        firewall = discovery.get("firewall") or {}
+        modules = discovery.get("security_modules") or {}
+        lines.append(f"- **主机名**：{host_info.get('hostname') or '-'}")
+        lines.append(f"- **操作系统**：{host_info.get('pretty') or '-'}")
+        lines.append(f"- **内核 / 架构**：{host_info.get('kernel') or '-'} / {host_info.get('arch') or '-'}")
+        lines.append(f"- **SSH 指纹**：`{host_info.get('fingerprint') or '-'}`")
+        lines.append(f"- **软件包**：{len(discovery.get('packages') or [])} 个　**待更新**：{len(discovery.get('updates') or [])} 个")
+        lines.append(f"- **运行服务**：{len(discovery.get('services') or [])} 个　**监听端口**：{len(discovery.get('listeners') or [])} 个")
+        lines.append(f"- **防火墙**：{'已启用' if firewall.get('active') else '未检测到'}")
+        lines.append(f"- **SELinux / AppArmor**：{modules.get('selinux', '-')} / {modules.get('apparmor', '-')}")
+        lines.append(f"- **SSH 认证**：密码认证 {ssh.get('passwordauthentication', '-')}，root 登录 {ssh.get('permitrootlogin', '-')}")
+        listeners = discovery.get("listeners") or []
+        if listeners:
+            exposed = [item for item in listeners if item.get("exposed")]
+            if exposed:
+                lines.append(
+                    "- **对外监听**：" + "、".join(f"{item['port']}/{item['proto']}" for item in exposed[:30])
+                )
+        updates = discovery.get("updates") or []
+        if updates:
             lines.append(
-                f"- **TLS**：{tls.get('protocol', '-')}，证书校验{'通过' if tls.get('verified') else '失败'}"
-                + (f"，剩余 {tls['days_left']} 天" if isinstance(tls.get("days_left"), int) else "")
+                "- **待更新软件包**："
+                + "、".join(
+                    f"{item['name']}" + ("（安全）" if item.get("security") else "") for item in updates[:20]
+                )
             )
+    else:
+        ips = assets.get("resolved_ips") or []
+        lines.append(f"- **解析地址**：{', '.join(ips) if ips else '未获取'}")
+        ports = assets.get("open_ports") or []
+        if ports:
+            lines.append("- **开放端口**：" + "、".join(f"{p['port']}({p.get('service', '')})" for p in ports[:30]))
         else:
-            lines.append("- **TLS**：未启用或探测失败")
-    subs = assets.get("subdomains") or []
-    if subs:
-        lines.append(f"- **子域名**：{', '.join(subs[:30])}")
+            lines.append("- **开放端口**：未探测或未发现")
+        tls = assets.get("tls") or {}
+        if tls:
+            if tls.get("supported"):
+                lines.append(
+                    f"- **TLS**：{tls.get('protocol', '-')}，证书校验{'通过' if tls.get('verified') else '失败'}"
+                    + (f"，剩余 {tls['days_left']} 天" if isinstance(tls.get("days_left"), int) else "")
+                )
+            else:
+                lines.append("- **TLS**：未启用或探测失败")
+        subs = assets.get("subdomains") or []
+        if subs:
+            lines.append(f"- **子域名**：{', '.join(subs[:30])}")
     lines.append("")
 
     lines.append("## 漏洞明细")
@@ -253,6 +291,8 @@ def build_html(scan: dict[str, Any]) -> str:
     findings = scan.get("findings") or []
     risk = _risk_level(summary)
     tone = _risk_tone(summary)
+    is_host = (config.get("scan_type") or "web") == "linux"
+    host_info = discovery.get("host") or {}
 
     cards = "".join(
         f'<div class="card sev-{severity}"><b>{summary.get(severity, 0)}</b><span>{SEVERITY_LABEL[severity]}</span></div>'
@@ -260,24 +300,42 @@ def build_html(scan: dict[str, Any]) -> str:
     )
     cards += f'<div class="card total"><b>{summary.get("total", 0)}</b><span>合计</span></div>'
 
-    assets_rows = [
-        ("解析地址", "、".join(assets.get("resolved_ips") or []) or "未获取"),
-        ("开放端口", "、".join(f"{p.get('port')}({p.get('service', '')})" for p in (assets.get("open_ports") or [])[:30]) or "未探测或未发现"),
-        ("子域名", "、".join((assets.get("subdomains") or [])[:30]) or "未启用或未发现"),
-    ]
-    tls = assets.get("tls") or {}
-    if tls.get("supported"):
-        assets_rows.append(
-            (
-                "TLS",
-                f"{tls.get('protocol', '-')}，"
-                + ("证书校验通过" if tls.get("verified") else "证书校验失败")
-                + (f"，剩余 {tls['days_left']} 天" if isinstance(tls.get("days_left"), int) else ""),
+    if is_host:
+        ssh = discovery.get("ssh") or {}
+        firewall = discovery.get("firewall") or {}
+        modules = discovery.get("security_modules") or {}
+        exposed = [item for item in (discovery.get("listeners") or []) if item.get("exposed")]
+        assets_rows = [
+            ("主机名", host_info.get("hostname") or "—"),
+            ("操作系统", host_info.get("pretty") or "—"),
+            ("内核 / 架构", f"{host_info.get('kernel') or '—'} / {host_info.get('arch') or '—'}"),
+            ("SSH 指纹", host_info.get("fingerprint") or "—"),
+            ("软件包", f"{len(discovery.get('packages') or [])} 个，待更新 {len(discovery.get('updates') or [])} 个"),
+            ("运行服务", f"{len(discovery.get('services') or [])} 个，监听端口 {len(discovery.get('listeners') or [])} 个"),
+            ("对外监听", "、".join(f"{item['port']}/{item['proto']}" for item in exposed[:30]) or "未发现"),
+            ("防火墙", "已启用" if firewall.get("active") else "未检测到"),
+            ("SELinux / AppArmor", f"{modules.get('selinux', '—')} / {modules.get('apparmor', '—')}"),
+            ("SSH 认证", f"密码认证 {ssh.get('passwordauthentication', '—')}，root 登录 {ssh.get('permitrootlogin', '—')}"),
+        ]
+    else:
+        assets_rows = [
+            ("解析地址", "、".join(assets.get("resolved_ips") or []) or "未获取"),
+            ("开放端口", "、".join(f"{p.get('port')}({p.get('service', '')})" for p in (assets.get("open_ports") or [])[:30]) or "未探测或未发现"),
+            ("子域名", "、".join((assets.get("subdomains") or [])[:30]) or "未启用或未发现"),
+        ]
+        tls = assets.get("tls") or {}
+        if tls.get("supported"):
+            assets_rows.append(
+                (
+                    "TLS",
+                    f"{tls.get('protocol', '-')}，"
+                    + ("证书校验通过" if tls.get("verified") else "证书校验失败")
+                    + (f"，剩余 {tls['days_left']} 天" if isinstance(tls.get("days_left"), int) else ""),
+                )
             )
-        )
-    tech = discovery.get("tech") or []
-    if tech:
-        assets_rows.append(("组件指纹", "、".join(f"{t.get('name')} {t.get('version', '')}".strip() for t in tech)))
+        tech = discovery.get("tech") or []
+        if tech:
+            assets_rows.append(("组件指纹", "、".join(f"{t.get('name')} {t.get('version', '')}".strip() for t in tech)))
 
     findings_html: list[str] = []
     for severity in SEVERITIES:
@@ -379,27 +437,25 @@ def build_html(scan: dict[str, Any]) -> str:
 <body>
 <main class="page">
   <header class="cover">
-    <div class="brand">VulnLens · Web Security Report</div>
+    <div class="brand">VulnLens · {"Linux Host Security Report" if is_host else "Web Security Report"}</div>
     <h1>{html.escape(str(scan.get("target") or ""))}</h1>
     <div class="cover-meta">
       <span class="risk {tone}">风险等级：{html.escape(risk)}</span>
       <span>扫描时间：{html.escape(_fmt_time(scan.get("created_at")))}</span>
       <span>耗时：{(summary.get("duration_ms") or 0) / 1000:.1f}s</span>
-      <span>预设：{html.escape(str(scan.get("preset") or "-"))}</span>
-      <span>请求：{summary.get("request_count", 0)}</span>
-      <span>页面：{summary.get("page_count", 0)}</span>
-      <span>接口：{summary.get("endpoint_count", 0)}</span>
+      <span>{"巡检：Linux 主机" if is_host else "预设：" + html.escape(str(scan.get("preset") or "-"))}</span>
+      {"" if is_host else f'<span>请求：{summary.get("request_count", 0)}</span><span>页面：{summary.get("page_count", 0)}</span><span>接口：{summary.get("endpoint_count", 0)}</span>'}
     </div>
   </header>
   <div class="body">
     <h2>风险概览</h2>
     <div class="cards">{cards}</div>
-    <h2>资产与暴露面</h2>
+    <h2>{"主机与系统信息" if is_host else "资产与暴露面"}</h2>
     <dl class="kv">{"".join(f"<dt>{html.escape(str(k))}</dt><dd>{html.escape(str(v))}</dd>" for k, v in assets_rows)}</dl>
     <h2>漏洞明细</h2>
     {''.join(findings_html)}
-    <h2>发现接口（前 100 条）</h2>
-    {'<table><thead><tr><th>方法</th><th>地址</th><th>来源</th><th>状态</th></tr></thead><tbody>' + endpoint_rows + '</tbody></table>' if endpoint_rows else '<div class="empty">未发现接口</div>'}
+    {'' if is_host else '<h2>发现接口（前 100 条）</h2>'}
+    {'' if is_host else ('<table><thead><tr><th>方法</th><th>地址</th><th>来源</th><th>状态</th></tr></thead><tbody>' + endpoint_rows + '</tbody></table>' if endpoint_rows else '<div class="empty">未发现接口</div>')}
     <footer>
       {html.escape(DISCLAIMER)}<br>
       生成时间：{html.escape(_fmt_time(time.time()))} · VulnLens v{REPORT_VERSION}
@@ -436,6 +492,20 @@ def build_json(scan: dict[str, Any]) -> str:
                 "cookies": discovery.get("cookies") or [],
                 "robots": discovery.get("robots") or [],
                 "sitemaps": discovery.get("sitemaps") or [],
+                **(
+                    {
+                        "host": discovery.get("host") or {},
+                        "packages": discovery.get("packages") or [],
+                        "updates": discovery.get("updates") or [],
+                        "services": discovery.get("services") or [],
+                        "listeners": discovery.get("listeners") or [],
+                        "ssh": discovery.get("ssh") or {},
+                        "firewall": discovery.get("firewall") or {},
+                        "security_modules": discovery.get("security_modules") or {},
+                    }
+                    if (scan.get("config") or {}).get("scan_type") == "linux"
+                    else {}
+                ),
             },
             "findings": scan.get("findings") or [],
         },

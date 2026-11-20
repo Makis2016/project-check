@@ -24,6 +24,7 @@ EXTENDED_PORTS = COMMON_PORTS + [444, 873, 1080, 1433, 1521, 2181, 2375, 3000, 5
 class ScanConfig:
     target: str
     preset: str = "standard"
+    scan_type: str = "web"
     authorization_confirmed: bool = False
     cookie: str = ""
     headers: dict[str, str] = field(default_factory=dict)
@@ -43,9 +44,17 @@ class ScanConfig:
     proxy: str = ""
     exclude_paths: list[str] = field(default_factory=list)
     secondary_cookie: str = ""
+    ssh_port: int = 22
+    ssh_user: str = ""
+    ssh_password: str = ""
+    ssh_key_path: str = ""
+    ssh_key_passphrase: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        data.pop("ssh_password", None)
+        data.pop("ssh_key_passphrase", None)
+        return data
 
 
 PRESET_DEFAULTS: dict[str, dict[str, Any]] = {
@@ -101,6 +110,14 @@ def _parse_exclude(raw: Any) -> list[str]:
     return cleaned[:50]
 
 
+def _clamp_port(raw: Any) -> int:
+    try:
+        port = int(raw or 22)
+    except (TypeError, ValueError):
+        port = 22
+    return min(max(port, 1), 65535)
+
+
 def build_config(payload: dict[str, Any]) -> ScanConfig:
     preset = payload.get("preset") or "standard"
     if preset not in PRESET_DEFAULTS:
@@ -109,6 +126,7 @@ def build_config(payload: dict[str, Any]) -> ScanConfig:
     cfg = ScanConfig(
         target=str(payload.get("target") or "").strip(),
         preset=preset,
+        scan_type="linux" if payload.get("scan_type") == "linux" else "web",
         authorization_confirmed=bool(payload.get("authorization_confirmed")),
         cookie=str(payload.get("cookie") or "").strip(),
         headers={str(k): str(v) for k, v in (payload.get("headers") or {}).items() if k},
@@ -128,6 +146,11 @@ def build_config(payload: dict[str, Any]) -> ScanConfig:
         proxy=str(payload.get("proxy") or "").strip(),
         exclude_paths=_parse_exclude(payload.get("exclude_paths")),
         secondary_cookie=str(payload.get("secondary_cookie") or "").strip()[:6000],
+        ssh_port=_clamp_port(payload.get("ssh_port")),
+        ssh_user=str(payload.get("ssh_user") or "").strip()[:128],
+        ssh_password=str(payload.get("ssh_password") or ""),
+        ssh_key_path=str(payload.get("ssh_key_path") or "").strip()[:1000],
+        ssh_key_passphrase=str(payload.get("ssh_key_passphrase") or ""),
     )
     cfg.rate_limit = min(max(cfg.rate_limit, 0.5), 30.0)
     cfg.max_pages = min(max(cfg.max_pages, 1), 500)

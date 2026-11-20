@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
@@ -15,10 +16,11 @@ from fastapi.staticfiles import StaticFiles
 
 from . import db
 from .scanner.engine import ScanEngine
+from .scanner.host import HostScanEngine
 from .scanner.models import SEVERITIES, build_config, new_scan_id
 from .scanner.report import build_csv, build_html, build_json, build_markdown
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 
 
@@ -63,6 +65,23 @@ def validate_target(raw: str) -> str:
     return raw.rstrip("/")
 
 
+HOST_PATTERN = re.compile(r"^[A-Za-z0-9._:%-]+$")
+
+
+def validate_ssh_target(raw: str) -> str:
+    host = (raw or "").strip()
+    if "://" in host:
+        parsed = urlparse(host)
+        host = (parsed.hostname or "").strip()
+    if not host:
+        raise HTTPException(status_code=400, detail="请输入主机 IP 或域名")
+    if len(host) > 253 or not HOST_PATTERN.match(host):
+        raise HTTPException(status_code=400, detail="主机地址格式不正确，只填写 IP 或域名，不要带协议和路径")
+    if host.lower() in BLOCKED_HOSTS:
+        raise HTTPException(status_code=400, detail="该地址为云元数据端点，禁止扫描")
+    return host
+
+
 @app.get("/api/health")
 async def health() -> dict:
     return {"ok": True, "name": "VulnLens", "version": VERSION}
@@ -76,8 +95,25 @@ async def create_scan(request: Request) -> dict:
         raise HTTPException(status_code=400, detail="请求体不是合法 JSON")
     if not payload.get("authorization_confirmed"):
         raise HTTPException(status_code=400, detail="请先确认：你拥有该目标的所有权或已获得扫描授权")
-    target = validate_target(payload.get("target", ""))
-    config = build_config({**payload, "target": target})
+
+    scan_type = "linux" if payload.get("scan_type") == "linux" else "web"
+    if scan_type == "linux":
+        host = validate_ssh_target(payload.get("target", ""))
+        ssh_user = str(payload.get("ssh_user") or "").strip()
+        if not ssh_user:
+            raise HTTPException(status_code=400, detail="请填写 SSH 用户名")
+        password = str(payload.get("ssh_password") or "")
+        key_path = str(payload.get("ssh_key_path") or "").strip()
+        if not password and not key_path:
+            raise HTTPException(status_code=400, detail="请填写 SSH 密码或私钥路径")
+        if key_path and not Path(key_path).expanduser().is_file():
+            raise HTTPException(status_code=400, detail="私钥文件不存在，请检查路径")
+        config = build_config({**payload, "target": host, "scan_type": "linux"})
+        target = f"ssh://{ssh_user}@{host}:{config.ssh_port}"
+    else:
+        target = validate_target(payload.get("target", ""))
+        config = build_config({**payload, "target": target})
+
     scan_id = new_scan_id()
     db.create_scan(scan_id, config.to_dict())
 
@@ -89,7 +125,7 @@ async def create_scan(request: Request) -> dict:
         if len(runner.buffer) > 6000:
             del runner.buffer[:1000]
 
-    engine = ScanEngine(scan_id, config, emit)
+    engine = HostScanEngine(scan_id, config, emit) if scan_type == "linux" else ScanEngine(scan_id, config, emit)
 
     async def run_engine() -> None:
         try:

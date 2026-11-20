@@ -2,17 +2,19 @@ import { useEffect, useState } from "react";
 import { createScan, getScan } from "./api";
 import type { Scan, ScanPayload } from "./types";
 import HistoryView from "./views/HistoryView";
+import HostScan from "./views/HostScan";
 import LiveScan from "./views/LiveScan";
 import NewScan from "./views/NewScan";
 import ReportView from "./views/ReportView";
-import { HistoryIcon, PlusIcon, RadarIcon, ShieldIcon } from "./components/Icons";
+import { HistoryIcon, PlusIcon, RadarIcon, ServerIcon, ShieldIcon } from "./components/Icons";
 
-type View = "new" | "live" | "report" | "history";
+type View = "new" | "host" | "live" | "report" | "history";
 
 interface ActiveScan {
   id: string;
   target: string;
   preset: string;
+  scanType?: string;
 }
 
 export default function App() {
@@ -30,7 +32,7 @@ export default function App() {
 
   const startScan = async (payload: ScanPayload) => {
     const result = await createScan(payload);
-    setActive({ id: result.id, target: result.target, preset: payload.preset });
+    setActive({ id: result.id, target: result.target, preset: payload.preset, scanType: payload.scan_type });
     setView("live");
   };
 
@@ -49,7 +51,7 @@ export default function App() {
     try {
       const data = await getScan(id);
       if (data.live) {
-        setActive({ id: data.id, target: data.target, preset: data.preset });
+        setActive({ id: data.id, target: data.target, preset: data.preset, scanType: data.config?.scan_type });
         setView("live");
       } else {
         setScan(data);
@@ -65,9 +67,14 @@ export default function App() {
     setView("new");
   };
 
-  const rescan = (target: string) => {
+  const goHost = () => {
+    setInitialTarget("");
+    setView("host");
+  };
+
+  const rescan = (target: string, scanType?: string) => {
     setInitialTarget(target);
-    setView("new");
+    setView(scanType === "linux" ? "host" : "new");
   };
 
   return (
@@ -89,6 +96,10 @@ export default function App() {
             <span>新建扫描</span>
             <span className="nav-key">N</span>
           </button>
+          <button className={`nav-item ${view === "host" ? "active" : ""}`} onClick={goHost}>
+            <ServerIcon width={17} height={17} />
+            <span>主机巡检</span>
+          </button>
           <button className={`nav-item ${view === "history" ? "active" : ""}`} onClick={() => setView("history")}>
             <HistoryIcon width={17} height={17} />
             <span>扫描历史</span>
@@ -101,11 +112,11 @@ export default function App() {
 
         <div className="sidebar-note">
           <div className="note-title">授权使用</div>
-          <p>仅扫描你拥有或已获授权的目标。工具默认限速，并限制请求总量。</p>
+          <p>仅扫描你拥有或已获授权的目标。主机巡检通过 SSH 只读采集，不修改目标系统。</p>
         </div>
 
         <div className="sidebar-foot">
-          <span className="version">v1.2.0</span>
+          <span className="version">v1.3.0</span>
           <span className="dot-sep" />
           <span>本地运行</span>
         </div>
@@ -114,11 +125,14 @@ export default function App() {
       <main className="main">
         {view === "new" ? <NewScan initialTarget={initialTarget} onStart={startScan} /> : null}
 
+        {view === "host" ? <HostScan initialTarget={initialTarget} onStart={startScan} /> : null}
+
         {view === "live" && active ? (
           <LiveScan
             scanId={active.id}
             target={active.target}
             preset={active.preset}
+            scanType={active.scanType}
             onDone={(id) => void handleLiveDone(id)}
           />
         ) : null}

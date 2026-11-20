@@ -13,6 +13,12 @@ const PHASES = [
   { key: "report", label: "生成报告" },
 ];
 
+const HOST_PHASES = [
+  { key: "connect", label: "SSH 连接" },
+  { key: "inspect", label: "系统巡检" },
+  { key: "report", label: "生成报告" },
+];
+
 const LEVEL_LABEL: Record<string, string> = {
   info: "INFO",
   success: "OK",
@@ -24,14 +30,17 @@ interface Props {
   scanId: string;
   target: string;
   preset: string;
+  scanType?: string;
   onDone: (id: string) => void;
 }
 
-export default function LiveScan({ scanId, target, preset, onDone }: Props) {
+export default function LiveScan({ scanId, target, preset, scanType, onDone }: Props) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
   const [progress, setProgress] = useState(0);
-  const [phase, setPhase] = useState("assets");
+  const isHost = scanType === "linux" || target.startsWith("ssh://");
+  const phases = isHost ? HOST_PHASES : PHASES;
+  const [phase, setPhase] = useState(isHost ? "connect" : "assets");
   const [stats, setStats] = useState({ requests: 0, elapsed: 0 });
   const [status, setStatus] = useState<"running" | "completed" | "failed" | "stopped">("running");
   const [message, setMessage] = useState("");
@@ -105,7 +114,7 @@ export default function LiveScan({ scanId, target, preset, onDone }: Props) {
 
   const currentIndex = Math.max(
     0,
-    PHASES.findIndex((item) => item.key === phase),
+    phases.findIndex((item) => item.key === phase),
   );
 
   const handleStop = async () => {
@@ -131,7 +140,7 @@ export default function LiveScan({ scanId, target, preset, onDone }: Props) {
           </div>
           <h1>{hostOf(target)}</h1>
           <div className="scan-sub mono">
-            {target} · {PRESET_LABEL[preset] ?? preset}
+            {target} · {isHost ? "主机只读巡检" : PRESET_LABEL[preset] ?? preset}
           </div>
         </div>
         <div className="scan-actions">
@@ -145,14 +154,14 @@ export default function LiveScan({ scanId, target, preset, onDone }: Props) {
       </header>
 
       <div className="stepper">
-        {PHASES.map((item, index) => {
+        {phases.map((item, index) => {
           const done = status === "completed" || index < currentIndex;
           const active = status === "running" && index === currentIndex;
           return (
             <div key={item.key} className={`step ${done ? "done" : ""} ${active ? "active" : ""}`}>
               <span className="step-dot">{done ? <CheckIcon width={12} height={12} /> : index + 1}</span>
               <span className="step-label">{item.label}</span>
-              {index < PHASES.length - 1 ? <span className="step-line" /> : null}
+              {index < phases.length - 1 ? <span className="step-line" /> : null}
             </div>
           );
         })}
@@ -162,10 +171,10 @@ export default function LiveScan({ scanId, target, preset, onDone }: Props) {
         <div className="progress-top">
           <div>
             <div className="progress-title">
-              {status === "running" ? PHASES[currentIndex]?.label : status === "completed" ? "扫描完成" : "已停止"}
+              {status === "running" ? phases[currentIndex]?.label : status === "completed" ? "扫描完成" : "已停止"}
             </div>
             <div className="progress-sub">
-              已发起 {stats.requests} 个请求 · 耗时 {formatDuration(stats.elapsed)}
+              {isHost ? `SSH 只读采集 · 耗时 ${formatDuration(stats.elapsed)}` : `已发起 ${stats.requests} 个请求 · 耗时 ${formatDuration(stats.elapsed)}`}
             </div>
           </div>
           <div className="progress-number">

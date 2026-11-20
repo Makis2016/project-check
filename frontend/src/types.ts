@@ -32,6 +32,9 @@ export interface Summary {
   page_count: number;
   request_count: number;
   duration_ms: number;
+  package_count?: number;
+  update_count?: number;
+  service_count?: number;
 }
 
 export interface PortInfo {
@@ -61,17 +64,63 @@ export interface Tech {
   evidence: string;
 }
 
+export interface HostInfo {
+  id?: string;
+  version_id?: string;
+  name?: string;
+  pretty?: string;
+  kernel?: string;
+  arch?: string;
+  hostname?: string;
+  user?: string;
+  port?: number;
+  target?: string;
+  fingerprint?: string;
+}
+
+export interface HostUpdate {
+  name: string;
+  version: string;
+  old_version?: string;
+  repo?: string;
+  arch?: string;
+  security?: boolean;
+}
+
+export interface HostListener {
+  proto: string;
+  address: string;
+  port: number;
+  exposed: boolean;
+}
+
 export interface Discovery {
   endpoints: Endpoint[];
   tech: Tech[];
   docs: string[];
   pages: unknown[];
   js_files: string[];
+  host?: HostInfo;
+  packages?: { name: string; version: string }[];
+  updates?: HostUpdate[];
+  services?: string[];
+  listeners?: HostListener[];
+  ssh?: Record<string, string>;
+  firewall?: { active?: boolean; ufw?: boolean; firewalld?: boolean; nft?: boolean; iptables?: boolean };
+  security_modules?: { selinux?: string; apparmor?: string };
+  uid0_accounts?: string[];
+  reboot_required?: boolean;
+  autoupdate?: boolean;
+  docker_socket?: Record<string, unknown>;
 }
 
 export interface ScanConfig {
   target: string;
   preset: string;
+  scan_type?: "web" | "linux";
+  ssh_port?: number;
+  ssh_user?: string;
+  ssh_key_path?: string;
   rate_limit: number;
   max_pages: number;
   max_requests: number;
@@ -124,6 +173,12 @@ export interface LogEntry {
 export interface ScanPayload {
   target: string;
   preset: string;
+  scan_type?: "web" | "linux";
+  ssh_port?: number;
+  ssh_user?: string;
+  ssh_password?: string;
+  ssh_key_path?: string;
+  ssh_key_passphrase?: string;
   authorization_confirmed: boolean;
   cookie?: string;
   headers?: Record<string, string>;

@@ -75,7 +75,7 @@ if sys.platform == "darwin":
         info_plist={
             "CFBundleName": "VulnLens",
             "CFBundleDisplayName": "VulnLens",
-            "CFBundleShortVersionString": "1.2.0",
+            "CFBundleShortVersionString": "1.3.0",
             "NSHighResolutionCapable": True,
         },
     )

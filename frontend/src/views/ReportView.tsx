@@ -22,12 +22,12 @@ import {
 } from "../components/Icons";
 import { formatDuration, formatTime, hostOf, PRESET_LABEL, riskLevel } from "../format";
 
-type Tab = "findings" | "endpoints" | "assets" | "compare";
+type Tab = "findings" | "host" | "endpoints" | "assets" | "compare";
 
 interface Props {
   scan: Scan;
   onBack: () => void;
-  onRescan: (target: string) => void;
+  onRescan: (target: string, scanType?: string) => void;
 }
 
 const STATUS_LABEL: Record<string, string> = {
@@ -69,7 +69,8 @@ function DiffList({
 }
 
 export default function ReportView({ scan, onBack, onRescan }: Props) {
-  const [tab, setTab] = useState<Tab>("findings");
+  const isHost = scan.config?.scan_type === "linux";
+  const [tab, setTab] = useState<Tab>(isHost ? "host" : "findings");
   const [severity, setSeverity] = useState<"all" | Severity>("all");
   const [query, setQuery] = useState("");
   const [exporting, setExporting] = useState<ExportFormat | null>(null);
@@ -142,6 +143,13 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
   const tech = scan.discovery?.tech ?? [];
   const assets = scan.assets;
   const risk = riskLevel(summary);
+  const host = scan.discovery?.host;
+  const hostUpdates = scan.discovery?.updates ?? [];
+  const hostServices = scan.discovery?.services ?? [];
+  const hostListeners = scan.discovery?.listeners ?? [];
+  const sshConfig = scan.discovery?.ssh ?? {};
+  const hostFirewall = scan.discovery?.firewall;
+  const hostModules = scan.discovery?.security_modules;
 
   const counts = useMemo(() => {
     const base: Record<string, number> = { all: findings.length };
@@ -185,10 +193,21 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
           <div className="report-meta">
             <span>{formatTime(scan.created_at)}</span>
             <span>{formatDuration(summary?.duration_ms)}</span>
-            <span>{PRESET_LABEL[scan.preset] ?? scan.preset}</span>
-            <span>{summary?.request_count ?? 0} 请求</span>
-            <span>{summary?.page_count ?? 0} 页面</span>
-            <span>{summary?.endpoint_count ?? 0} 接口</span>
+            {isHost ? (
+              <>
+                <span>Linux 主机只读巡检</span>
+                <span>{scan.discovery?.host?.pretty || scan.discovery?.host?.id || "未知系统"}</span>
+                <span>{summary?.package_count ?? 0} 软件包</span>
+                <span>{summary?.update_count ?? 0} 待更新</span>
+              </>
+            ) : (
+              <>
+                <span>{PRESET_LABEL[scan.preset] ?? scan.preset}</span>
+                <span>{summary?.request_count ?? 0} 请求</span>
+                <span>{summary?.page_count ?? 0} 页面</span>
+                <span>{summary?.endpoint_count ?? 0} 接口</span>
+              </>
+            )}
           </div>
         </div>
         <div className="report-actions">
@@ -209,8 +228,8 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
               </div>
             ) : null}
           </div>
-          <button className="btn btn-primary" onClick={() => onRescan(scan.target)}>
-            <RefreshIcon width={16} height={16} /> 重新扫描
+          <button className="btn btn-primary" onClick={() => onRescan(scan.target, scan.config?.scan_type)}>
+            <RefreshIcon width={16} height={16} /> {isHost ? "重新巡检" : "重新扫描"}
           </button>
         </div>
       </header>
@@ -229,28 +248,49 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
       {summary ? <SeveritySummary summary={summary} /> : null}
 
       <div className="metric-row">
-        <div className="metric"><span>页面</span><b>{summary?.page_count ?? 0}</b></div>
-        <div className="metric"><span>接口</span><b>{summary?.endpoint_count ?? 0}</b></div>
-        <div className="metric"><span>开放端口</span><b>{assets?.open_ports?.length ?? 0}</b></div>
-        <div className="metric"><span>组件指纹</span><b>{tech.length}</b></div>
-        <div className="metric"><span>请求</span><b>{summary?.request_count ?? 0}</b></div>
+        {isHost ? (
+          <>
+            <div className="metric"><span>软件包</span><b>{summary?.package_count ?? 0}</b></div>
+            <div className="metric"><span>待更新</span><b>{summary?.update_count ?? 0}</b></div>
+            <div className="metric"><span>运行服务</span><b>{summary?.service_count ?? hostServices.length}</b></div>
+            <div className="metric"><span>监听端口</span><b>{hostListeners.length}</b></div>
+            <div className="metric"><span>发现</span><b>{findings.length}</b></div>
+          </>
+        ) : (
+          <>
+            <div className="metric"><span>页面</span><b>{summary?.page_count ?? 0}</b></div>
+            <div className="metric"><span>接口</span><b>{summary?.endpoint_count ?? 0}</b></div>
+            <div className="metric"><span>开放端口</span><b>{assets?.open_ports?.length ?? 0}</b></div>
+            <div className="metric"><span>组件指纹</span><b>{tech.length}</b></div>
+            <div className="metric"><span>请求</span><b>{summary?.request_count ?? 0}</b></div>
+          </>
+        )}
       </div>
 
       <div className="tabs">
+        {isHost ? (
+          <button className={`tab ${tab === "host" ? "active" : ""}`} onClick={() => openTab("host")}>
+            <ServerIcon width={14} height={14} /> 主机信息
+          </button>
+        ) : null}
         <button className={`tab ${tab === "findings" ? "active" : ""}`} onClick={() => openTab("findings")}>
           发现 <span>{findings.length}</span>
         </button>
-        <button className={`tab ${tab === "endpoints" ? "active" : ""}`} onClick={() => openTab("endpoints")}>
-          接口 <span>{endpoints.length}</span>
-        </button>
-        <button className={`tab ${tab === "assets" ? "active" : ""}`} onClick={() => openTab("assets")}>
-          资产 <span>{(assets?.open_ports?.length ?? 0) + tech.length}</span>
-        </button>
+        {isHost ? null : (
+          <>
+            <button className={`tab ${tab === "endpoints" ? "active" : ""}`} onClick={() => openTab("endpoints")}>
+              接口 <span>{endpoints.length}</span>
+            </button>
+            <button className={`tab ${tab === "assets" ? "active" : ""}`} onClick={() => openTab("assets")}>
+              资产 <span>{(assets?.open_ports?.length ?? 0) + tech.length}</span>
+            </button>
+          </>
+        )}
         <button className={`tab ${tab === "compare" ? "active" : ""}`} onClick={() => openTab("compare")}>
           <DiffIcon width={14} height={14} /> 对比
           {diff?.available && diff.counts ? <span className="tab-delta">+{diff.counts.added}</span> : null}
         </button>
-        {tab !== "compare" ? (
+        {tab === "findings" || tab === "endpoints" ? (
           <div className="toolbar-search">
             <SearchIcon width={15} height={15} />
             <input
@@ -292,6 +332,100 @@ export default function ReportView({ scan, onBack, onRescan }: Props) {
                 <p>调整筛选条件，或扫描完成后回来查看。</p>
               </div>
             ) : null}
+          </div>
+        </>
+      ) : null}
+
+      {tab === "host" ? (
+        <>
+          <div className="asset-grid">
+            <section className="panel asset-card">
+              <header className="panel-head"><span><ServerIcon width={15} height={15} /> 系统信息</span></header>
+              <div className="asset-body">
+                <dl className="kv">
+                  <dt>主机名</dt><dd className="mono">{host?.hostname || "—"}</dd>
+                  <dt>操作系统</dt><dd>{host?.pretty || host?.id || "—"}</dd>
+                  <dt>内核 / 架构</dt><dd className="mono">{host?.kernel || "—"} / {host?.arch || "—"}</dd>
+                  <dt>SSH 账号</dt><dd className="mono">{host?.user || "—"}@{host?.target || "—"}:{host?.port ?? 22}</dd>
+                  <dt>主机指纹</dt><dd className="mono break-all">{host?.fingerprint || "—"}</dd>
+                </dl>
+              </div>
+            </section>
+
+            <section className="panel asset-card">
+              <header className="panel-head"><span>安全配置</span></header>
+              <div className="asset-body">
+                <dl className="kv">
+                  <dt>防火墙</dt><dd>{hostFirewall?.active ? "已启用" : "未检测到"}</dd>
+                  <dt>SELinux</dt><dd>{hostModules?.selinux || "—"}</dd>
+                  <dt>AppArmor</dt><dd>{hostModules?.apparmor || "—"}</dd>
+                  <dt>密码登录</dt><dd>{sshConfig.passwordauthentication || "—"}</dd>
+                  <dt>root 登录</dt><dd>{sshConfig.permitrootlogin || "—"}</dd>
+                  <dt>自动安全更新</dt><dd>{scan.discovery?.autoupdate ? "已启用" : "未启用"}</dd>
+                  <dt>需要重启</dt><dd>{scan.discovery?.reboot_required ? "是" : "否"}</dd>
+                </dl>
+                {scan.discovery?.uid0_accounts?.length ? (
+                  <div className="tag-row">
+                    <span className="asset-label">UID 0 账号</span>
+                    {scan.discovery.uid0_accounts.map((item) => <span key={item} className="tag tag-risk mono">{item}</span>)}
+                  </div>
+                ) : null}
+              </div>
+            </section>
+
+            <section className="panel asset-card">
+              <header className="panel-head"><span>监听端口</span></header>
+              <div className="asset-body">
+                <div className="tag-row">
+                  {hostListeners.map((item) => (
+                    <span key={`${item.proto}-${item.address}-${item.port}`} className={`tag mono ${item.exposed ? "tag-risk" : ""}`}>
+                      {item.port}/{item.proto} <em>{item.address}</em>
+                    </span>
+                  ))}
+                  {!hostListeners.length ? <span className="muted">未采集到监听端口</span> : null}
+                </div>
+              </div>
+            </section>
+
+            <section className="panel asset-card">
+              <header className="panel-head"><span>运行服务</span></header>
+              <div className="asset-body">
+                <div className="tag-row">
+                  {hostServices.slice(0, 80).map((item) => <span key={item} className="tag mono">{item}</span>)}
+                  {!hostServices.length ? <span className="muted">未采集到运行服务</span> : null}
+                </div>
+                {hostServices.length > 80 ? <div className="muted">仅展示前 80 个</div> : null}
+              </div>
+            </section>
+          </div>
+
+          <div className="panel table-panel">
+            <header className="panel-head">
+              <span>待更新软件包</span>
+              <span className="panel-count mono">{hostUpdates.length}</span>
+            </header>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>软件包</th>
+                  <th>新版本</th>
+                  <th>当前版本</th>
+                  <th>类型</th>
+                </tr>
+              </thead>
+              <tbody>
+                {hostUpdates.slice(0, 300).map((item, index) => (
+                  <tr key={`${item.name}-${item.version}-${index}`}>
+                    <td className="mono">{item.name}</td>
+                    <td className="mono cell-url">{item.version}</td>
+                    <td className="mono">{item.old_version || "—"}</td>
+                    <td>{item.security ? <span className="tag tag-risk">安全更新</span> : <span className="muted">普通更新</span>}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!hostUpdates.length ? <div className="empty-row">没有待安装的更新</div> : null}
+            {hostUpdates.length > 300 ? <div className="table-foot">仅展示前 300 条</div> : null}
           </div>
         </>
       ) : null}

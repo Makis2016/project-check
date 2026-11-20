@@ -93,9 +93,13 @@ export default function HistoryView({ onOpen, onNew }: Props) {
                   <div className="history-sub mono">{scan.target}</div>
                   <div className="history-meta">
                     <span>{formatTime(scan.created_at)}</span>
-                    <span>{PRESET_LABEL[scan.preset] ?? scan.preset}</span>
+                    <span>{scan.config?.scan_type === "linux" ? "主机巡检" : PRESET_LABEL[scan.preset] ?? scan.preset}</span>
                     <span>{formatDuration(scan.summary?.duration_ms)}</span>
-                    <span>{scan.summary?.endpoint_count ?? 0} 接口</span>
+                    <span>
+                      {scan.config?.scan_type === "linux"
+                        ? `${scan.summary?.update_count ?? 0} 待更新`
+                        : `${scan.summary?.endpoint_count ?? 0} 接口`}
+                    </span>
                   </div>
                 </div>
                 <div className="history-stats">
